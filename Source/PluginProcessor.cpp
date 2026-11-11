@@ -346,6 +346,19 @@ void OxfordUltraAudioProcessor::setStateInformation(const void* data, int sizeIn
     if (xmlState != nullptr && xmlState->hasTagName(apvts.state.getType()))
     {
         apvts.replaceState(juce::ValueTree::fromXml(*xmlState));
+
+        // replaceState() skips parameters whose stored value equals the current *plain* value, so a
+        // switch left at a non-binary normalized value (e.g. 0.64 = "on") would never be reset to
+        // exactly 1. Force every parameter onto its restored value.
+        for (auto* param : getParameters())
+            if (auto* rp = dynamic_cast<juce::RangedAudioParameter*>(param))
+                if (auto* raw = apvts.getRawParameterValue(rp->paramID))
+                {
+                    const float want = rp->convertTo0to1(raw->load());
+                    if (std::abs(rp->getValue() - want) > 1.0e-6f)
+                        rp->setValueNotifyingHost(want);
+                }
+
         currentProgram.store(juce::jlimit(0, BubLeonPresets::count() - 1, (int) apvts.state.getProperty("presetIndex", 0)),
                              std::memory_order_relaxed);
     }
