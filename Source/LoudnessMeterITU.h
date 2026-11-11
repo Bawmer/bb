@@ -91,7 +91,7 @@ namespace BubLeonDSP
             void prepare (double fs) noexcept { kL.prepare (fs); kR.prepare (fs); reset(); }
             void reset() noexcept { kL.reset(); kR.reset(); blocks.fill (0.0); blockWrite = blocksFilled = 0; acc = 0.0; }
 
-            inline void push (float l, float r) noexcept
+            inline void push (double l, double r) noexcept
             {
                 const double a = kL.process (l), b = kR.process (r);
                 acc += a * a + b * b;
@@ -129,20 +129,20 @@ namespace BubLeonDSP
             blockLen = std::max (1, (int) std::lround (0.1 * fs));
             delayCapacity = std::max (0, maxLatencySamples);
             delayLen = delayCapacity;
-            dryL.assign ((size_t) delayCapacity + 1, 0.0f);
-            dryR.assign ((size_t) delayCapacity + 1, 0.0f);
-            gainSmooth = 1.0f - std::exp (-1.0f / (0.05f * (float) fs));
+            dryL.assign ((size_t) delayCapacity + 1, 0.0);
+            dryR.assign ((size_t) delayCapacity + 1, 0.0);
+            gainSmooth = 1.0 - std::exp (-1.0 / (0.05 * fs));
             reset();
         }
 
         void reset() noexcept
         {
             inMeter.reset(); outMeter.reset();
-            std::fill (dryL.begin(), dryL.end(), 0.0f);
-            std::fill (dryR.begin(), dryR.end(), 0.0f);
+            std::fill (dryL.begin(), dryL.end(), 0.0);
+            std::fill (dryR.begin(), dryR.end(), 0.0);
             dryPos = 0; blockCount = 0;
             histCount.fill (0); histEnergy.fill (0.0);
-            matchDb = 0.0f; matchLin = 1.0f; matchLinTarget = 1.0f; tpMax = 0.0f;
+            matchDb = 0.0f; matchLin = 1.0; matchLinTarget = 1.0f; tpMax = 0.0f;
             publish (-70.0f, -70.0f, -70.0f, -70.0f);
         }
 
@@ -154,8 +154,8 @@ namespace BubLeonDSP
             const int newLen = std::clamp (latencySamples, 0, delayCapacity);
             if (newLen == delayLen) return;
             delayLen = newLen;
-            std::fill (dryL.begin(), dryL.end(), 0.0f);
-            std::fill (dryR.begin(), dryR.end(), 0.0f);
+            std::fill (dryL.begin(), dryL.end(), 0.0);
+            std::fill (dryR.begin(), dryR.end(), 0.0);
             dryPos = 0;
         }
 
@@ -168,9 +168,9 @@ namespace BubLeonDSP
         }
 
         // inL/inR: raw (pre-limiter) input. outL/outR: limiter output, gain-matched in place when enabled.
-        void processSampleStereo (float inL, float inR, float& outL, float& outR, float outTruePeakLin) noexcept
+        void processSampleStereo (double inL, double inR, double& outL, double& outR, float outTruePeakLin) noexcept
         {
-            float dl = inL, dr = inR;
+            double dl = inL, dr = inR;
             if (delayLen > 0)
             {
                 dl = dryL[(size_t) dryPos]; dr = dryR[(size_t) dryPos];
@@ -182,7 +182,7 @@ namespace BubLeonDSP
             outMeter.push (outL, outR);               // measured pre-match: true limiter output loudness
             tpMax = std::max (tpMax, outTruePeakLin);          // max true peak since reset (EBU Tech 3342)
 
-            matchLin += gainSmooth * ((matchOn ? matchLinTarget : 1.0f) - matchLin);
+            matchLin += gainSmooth * ((matchOn ? (double) matchLinTarget : 1.0) - matchLin);
             outL *= matchLin; outR *= matchLin;
 
             if (++blockCount >= blockLen)
@@ -270,14 +270,15 @@ namespace BubLeonDSP
         loudness_detail::StereoLoudness inMeter, outMeter;
         int blockLen = 4800, blockCount = 0;
 
-        std::vector<float> dryL, dryR;
+        std::vector<double> dryL, dryR;
         int delayLen = 0, delayCapacity = 0, dryPos = 0;
 
         std::array<int, kHistBins>    histCount {};
         std::array<double, kHistBins> histEnergy {};
 
         bool  matchOn = false;
-        float matchDb = 0.0f, matchLin = 1.0f, matchLinTarget = 1.0f, gainSmooth = 0.001f;
+        float matchDb = 0.0f, matchLinTarget = 1.0f;
+        double matchLin = 1.0, gainSmooth = 0.001;
         float tpMax = 0.0f;
 
         std::atomic<float> aInST { -70.0f }, aOutST { -70.0f }, aOutM { -70.0f }, aOutI { -70.0f };

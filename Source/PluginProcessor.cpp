@@ -160,6 +160,7 @@ void OxfordUltraAudioProcessor::prepareToPlay(double sampleRate, int samplesPerB
 
     scopeCollector.prepare(sampleRate, 180);
     dryInputCopy.setSize(2, maxBlockSize, false, true, false);
+    workBuffer.setSize(2, maxBlockSize, false, true, false);
 }
 
 void OxfordUltraAudioProcessor::updateLatencyForEngine() noexcept
@@ -223,6 +224,17 @@ void OxfordUltraAudioProcessor::syncParametersFromAPVTS() noexcept
 
 void OxfordUltraAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
 {
+    processHostBlock(buffer);
+}
+
+void OxfordUltraAudioProcessor::processBlock(juce::AudioBuffer<double>& buffer, juce::MidiBuffer&)
+{
+    processHostBlock(buffer);
+}
+
+template <typename SampleType>
+void OxfordUltraAudioProcessor::processHostBlock(juce::AudioBuffer<SampleType>& buffer) noexcept
+{
     juce::ScopedNoDenormals noDenormals;
 
     const int numSamples = buffer.getNumSamples();
@@ -245,16 +257,38 @@ void OxfordUltraAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, j
 
     // Hosts may exceed the prepared block size: split so the oversampler and scratch
     // buffers are never overrun (and nothing is allocated on the audio thread).
-    float* const* channels = buffer.getArrayOfWritePointers();
+    SampleType* const* channels = buffer.getArrayOfWritePointers();
     for (int start = 0; start < numSamples; start += maxBlockSize)
     {
         const int n = juce::jmin(maxBlockSize, numSamples - start);
-        juce::AudioBuffer<float> chunk(channels, 2, start, n);   // references host memory, no allocation
-        processChunk(chunk);
+
+        if constexpr (std::is_same_v<SampleType, double>)
+        {
+            juce::AudioBuffer<double> chunk(channels, 2, start, n);   // 64-bit host: process in place
+            processChunk(chunk);
+        }
+        else
+        {
+            // 32-bit host: widen to 64-bit, run the 64-bit core, narrow back
+            juce::AudioBuffer<double> chunk(workBuffer.getArrayOfWritePointers(), 2, 0, n);
+            for (int ch = 0; ch < 2; ++ch)
+            {
+                const SampleType* src = channels[ch] + start;
+                double* dst = chunk.getWritePointer(ch);
+                for (int i = 0; i < n; ++i) dst[i] = (double) src[i];
+            }
+            processChunk(chunk);
+            for (int ch = 0; ch < 2; ++ch)
+            {
+                const double* src = chunk.getReadPointer(ch);
+                SampleType* dst = channels[ch] + start;
+                for (int i = 0; i < n; ++i) dst[i] = (SampleType) src[i];
+            }
+        }
     }
 }
 
-void OxfordUltraAudioProcessor::processChunk(juce::AudioBuffer<float>& buffer) noexcept
+void OxfordUltraAudioProcessor::processChunk(juce::AudioBuffer<double>& buffer) noexcept
 {
     const int numSamples = buffer.getNumSamples();
 
@@ -267,11 +301,11 @@ void OxfordUltraAudioProcessor::processChunk(juce::AudioBuffer<float>& buffer) n
     // 2. Process Limiting Core (4x Oversampled or 1x Low-Latency Base Rate)
     if (lastOsActive)
     {
-        juce::dsp::AudioBlock<float> baseBlock(buffer);
-        juce::dsp::AudioBlock<float> osBlock = oversampler4x.processSamplesUp(baseBlock);
+        juce::dsp::AudioBlock<double> baseBlock(buffer);
+        juce::dsp::AudioBlock<double> osBlock = oversampler4x.processSamplesUp(baseBlock);
 
-        float* osL = osBlock.getChannelPointer(0);
-        float* osR = osBlock.getChannelPointer(1);
+        double* osL = osBlock.getChannelPointer(0);
+        double* osR = osBlock.getChannelPointer(1);
         const size_t numOsSamples = osBlock.getNumSamples();
 
         for (size_t i = 0; i < numOsSamples; ++i)
@@ -281,17 +315,17 @@ void OxfordUltraAudioProcessor::processChunk(juce::AudioBuffer<float>& buffer) n
     }
     else
     {
-        float* outL = buffer.getWritePointer(0);
-        float* outR = buffer.getWritePointer(1);
+        double* outL = buffer.getWritePointer(0);
+        double* outR = buffer.getWritePointer(1);
         for (int i = 0; i < numSamples; ++i)
             limiter1x.processOversampledStereo(outL[i], outR[i]);
     }
 
     // 3. Base-Rate ITU-R BS.1770-4 LUFS/PLR Analysis, Unity Gain Match & Psychoacoustic Dither
-    const float* rawL = dryInputCopy.getReadPointer(0);
-    const float* rawR = dryInputCopy.getReadPointer(1);
-    float* outL = buffer.getWritePointer(0);
-    float* outR = buffer.getWritePointer(1);
+    const double* rawL = dryInputCopy.getReadPointer(0);
+    const double* rawR = dryInputCopy.getReadPointer(1);
+    double* outL = buffer.getWritePointer(0);
+    double* outR = buffer.getWritePointer(1);
 
     const auto tele = activeLimiter.getTelemetry();
     const float tpLin = std::pow(10.0f, tele.outputTruePeakDb * 0.05f);
@@ -302,7 +336,7 @@ void OxfordUltraAudioProcessor::processChunk(juce::AudioBuffer<float>& buffer) n
     {
         loudnessAnalyzer.processSampleStereo(rawL[i], rawR[i], outL[i], outR[i], tpLin);
         activeLimiter.processBaseRateDitherStereo(outL[i], outR[i]);
-        scopeCollector.pushBaseRateSample(rawL[i], rawR[i], outL[i], outR[i], inGainDb, ceilDb, tele);
+        scopeCollector.pushBaseRateSample((float) rawL[i], (float) rawR[i], (float) outL[i], (float) outR[i], inGainDb, ceilDb, tele);
     }
 }
 

@@ -3,6 +3,7 @@
 // 1st-order ADAA "Enhance" waveshaper, Lemire O(1) lookahead with dual-boxcar parabolic ramp,
 // AVX2/FMA3 ITU-R BS.1770-4 true-peak interpolator, Wannamaker noise-shaped TPDF dither.
 //
+// Precision: the whole audio path is 64-bit floating point (AVX2 double SIMD).
 // Real-time contract: prepare() is the only allocating call. Everything else is lock-free,
 // allocation-free and noexcept.
 #pragma once
@@ -57,70 +58,76 @@ namespace BubLeonDSP
 
     namespace detail
     {
-        inline float dbToLin (float db) noexcept { return std::pow (10.0f, db * 0.05f); }
-        inline float linToDb (float lin) noexcept { return 20.0f * std::log10 (std::max (lin, 1.0e-6f)); }
+        // All audio-path math is 64-bit (double). Parameters/telemetry stay float.
+        inline float  dbToLin (float db) noexcept   { return std::pow (10.0f, db * 0.05f); }
+        inline double dbToLin (double db) noexcept  { return std::pow (10.0, db * 0.05); }
+        inline float  linToDb (float lin) noexcept  { return 20.0f * std::log10 (std::max (lin, 1.0e-6f)); }
+        inline double linToDb (double lin) noexcept { return 20.0 * std::log10 (std::max (lin, 1.0e-12)); }
 
-        inline float msToCoeff (float ms, double fs) noexcept
+        inline double msToCoeff (double ms, double fs) noexcept
         {
-            return 1.0f - std::exp (-1.0f / (std::max (ms, 0.001f) * 0.001f * static_cast<float> (fs)));
+            return 1.0 - std::exp (-1.0 / (std::max (ms, 0.001) * 0.001 * fs));
         }
 
         inline int nextPow2 (int v) noexcept { int p = 1; while (p < v) p <<= 1; return p; }
 
         // ---------------------------------------------------------------------------
-        // Cytomic trapezoidal SVF, 4 lanes. LR4 = two cascaded Butterworth (Q = 1/sqrt2) stages.
+        // Cytomic trapezoidal SVF, 4 lanes x 64-bit (AVX2 __m256d).
+        // LR4 = two cascaded Butterworth (Q = 1/sqrt2) stages.
         // ---------------------------------------------------------------------------
         struct SvfCoeffs
         {
-            __m128 a1 {}, a2 {}, a3 {}, k {};
-            void set (float fc, float q, double fs) noexcept
+            __m256d a1 {}, a2 {}, a3 {}, k {};
+            void set (double fc, double q, double fs) noexcept
             {
-                fc = std::clamp (fc, 10.0f, 0.45f * static_cast<float> (fs));
-                const float g  = std::tan (std::numbers::pi_v<float> * fc / static_cast<float> (fs));
-                const float kk = 1.0f / q;
-                const float A1 = 1.0f / (1.0f + g * (g + kk));
-                const float A2 = g * A1;
-                a1 = _mm_set1_ps (A1); a2 = _mm_set1_ps (A2); a3 = _mm_set1_ps (g * A2); k = _mm_set1_ps (kk);
+                fc = std::clamp (fc, 10.0, 0.45 * fs);
+                const double g  = std::tan (std::numbers::pi * fc / fs);
+                const double kk = 1.0 / q;
+                const double A1 = 1.0 / (1.0 + g * (g + kk));
+                const double A2 = g * A1;
+                a1 = _mm256_set1_pd (A1); a2 = _mm256_set1_pd (A2); a3 = _mm256_set1_pd (g * A2); k = _mm256_set1_pd (kk);
             }
         };
 
         struct Svf4
         {
-            __m128 ic1 = _mm_setzero_ps(), ic2 = _mm_setzero_ps();
-            void reset() noexcept { ic1 = ic2 = _mm_setzero_ps(); }
+            __m256d ic1 = _mm256_setzero_pd(), ic2 = _mm256_setzero_pd();
+            void reset() noexcept { ic1 = ic2 = _mm256_setzero_pd(); }
 
             // returns lp, writes hp
-            inline __m128 tick (__m128 v0, const SvfCoeffs& c, __m128& hp) noexcept
+            inline __m256d tick (__m256d v0, const SvfCoeffs& c, __m256d& hp) noexcept
             {
-                const __m128 v3 = _mm_sub_ps (v0, ic2);
-                const __m128 v1 = _mm_fmadd_ps (c.a1, ic1, _mm_mul_ps (c.a2, v3));
-                const __m128 v2 = _mm_add_ps (ic2, _mm_fmadd_ps (c.a2, ic1, _mm_mul_ps (c.a3, v3)));
-                ic1 = _mm_sub_ps (_mm_add_ps (v1, v1), ic1);
-                ic2 = _mm_sub_ps (_mm_add_ps (v2, v2), ic2);
-                hp  = _mm_sub_ps (_mm_sub_ps (v0, _mm_mul_ps (c.k, v1)), v2);
+                const __m256d v3 = _mm256_sub_pd (v0, ic2);
+                const __m256d v1 = _mm256_fmadd_pd (c.a1, ic1, _mm256_mul_pd (c.a2, v3));
+                const __m256d v2 = _mm256_add_pd (ic2, _mm256_fmadd_pd (c.a2, ic1, _mm256_mul_pd (c.a3, v3)));
+                ic1 = _mm256_sub_pd (_mm256_add_pd (v1, v1), ic1);
+                ic2 = _mm256_sub_pd (_mm256_add_pd (v2, v2), ic2);
+                hp  = _mm256_sub_pd (_mm256_sub_pd (v0, _mm256_mul_pd (c.k, v1)), v2);
                 return v2;
             }
         };
 
-        // Stereo LR4 split: lanes stage1 {L,R,-,-}; stage2 {lpL,lpR,hpL,hpR}
+        // Stereo LR4 split: stage1 lanes {L,R,-,-}; stage2 lanes {lpL,lpR,hpL,hpR}
         struct LR4SplitStereo
         {
             SvfCoeffs c; Svf4 s1, s2;
             void reset() noexcept { s1.reset(); s2.reset(); }
-            inline void process (float l, float r, float& lfL, float& lfR, float& hfL, float& hfR) noexcept
+            inline void process (double l, double r, double& lfL, double& lfR, double& hfL, double& hfR) noexcept
             {
-                __m128 hp1, hp2;
-                const __m128 lp1 = s1.tick (_mm_setr_ps (l, r, 0.0f, 0.0f), c, hp1);
-                const __m128 lp2 = s2.tick (_mm_movelh_ps (lp1, hp1), c, hp2);
-                alignas (16) float lo[4], hi[4];
-                _mm_store_ps (lo, lp2); _mm_store_ps (hi, hp2);
+                __m256d hp1, hp2;
+                const __m256d lp1 = s1.tick (_mm256_setr_pd (l, r, 0.0, 0.0), c, hp1);
+                // {lp1L, lp1R, hp1L, hp1R}
+                const __m256d in2 = _mm256_permute2f128_pd (lp1, hp1, 0x20);
+                const __m256d lp2 = s2.tick (in2, c, hp2);
+                alignas (32) double lo[4], hi[4];
+                _mm256_store_pd (lo, lp2); _mm256_store_pd (hi, hp2);
                 lfL = lo[0]; lfR = lo[1]; hfL = hi[2]; hfR = hi[3];
             }
         };
 
         // ---------------------------------------------------------------------------
         // ITU-R BS.1770-4 Annex 2 true-peak interpolator: 48-tap Kaiser sinc, 4 phases,
-        // pre-transposed into 12 rows. AVX: both channels x 4 phases in one __m256 per tap.
+        // pre-transposed into 12 rows of 4 doubles. One __m256d accumulator per channel.
         // Window covered per call: samples (n-6, n-5] at 4x, plus x[n-6]. Latency = 6 samples.
         // ---------------------------------------------------------------------------
         class TruePeakStereo
@@ -133,34 +140,34 @@ namespace BubLeonDSP
 
             void reset() noexcept
             {
-                std::fill (std::begin (hL), std::end (hL), 0.0f);
-                std::fill (std::begin (hR), std::end (hR), 0.0f);
+                std::fill (std::begin (hL), std::end (hL), 0.0);
+                std::fill (std::begin (hR), std::end (hR), 0.0);
                 w = 0;
             }
 
-            inline void process (float xL, float xR, float& peakL, float& peakR) noexcept
+            inline void process (double xL, double xR, double& peakL, double& peakR) noexcept
             {
                 w = (w == 0) ? kRows - 1 : w - 1;
                 hL[w] = hL[w + kRows] = xL;
                 hR[w] = hR[w + kRows] = xR;
 
-                __m256 acc = _mm256_setzero_ps();
+                __m256d accL = _mm256_setzero_pd(), accR = _mm256_setzero_pd();
                 for (int j = 0; j < kRows; ++j)
                 {
-                    const __m256 x = _mm256_set_m128 (_mm_set1_ps (hR[w + j]), _mm_set1_ps (hL[w + j]));
-                    acc = _mm256_fmadd_ps (rows[j], x, acc);
+                    accL = _mm256_fmadd_pd (rows[j], _mm256_set1_pd (hL[w + j]), accL);
+                    accR = _mm256_fmadd_pd (rows[j], _mm256_set1_pd (hR[w + j]), accR);
                 }
-                acc = _mm256_andnot_ps (_mm256_set1_ps (-0.0f), acc);
-                peakL = std::max (hmax (_mm256_castps256_ps128 (acc)),   std::fabs (hL[w + kLatency]));
-                peakR = std::max (hmax (_mm256_extractf128_ps (acc, 1)), std::fabs (hR[w + kLatency]));
+                const __m256d sign = _mm256_set1_pd (-0.0);
+                peakL = std::max (hmax (_mm256_andnot_pd (sign, accL)), std::fabs (hL[w + kLatency]));
+                peakR = std::max (hmax (_mm256_andnot_pd (sign, accR)), std::fabs (hR[w + kLatency]));
             }
 
         private:
-            static inline float hmax (__m128 v) noexcept
+            static inline double hmax (__m256d v) noexcept
             {
-                v = _mm_max_ps (v, _mm_movehl_ps (v, v));
-                v = _mm_max_ss (v, _mm_shuffle_ps (v, v, 1));
-                return _mm_cvtss_f32 (v);
+                __m128d m = _mm_max_pd (_mm256_castpd256_pd128 (v), _mm256_extractf128_pd (v, 1));
+                m = _mm_max_sd (m, _mm_unpackhi_pd (m, m));
+                return _mm_cvtsd_f64 (m);
             }
 
             static double besselI0 (double x) noexcept
@@ -187,14 +194,11 @@ namespace BubLeonDSP
                     for (int j = 0; j < kRows; ++j) h[4 * j + p] /= s;
                 }
                 for (int j = 0; j < kRows; ++j)
-                {
-                    const __m128 row = _mm_setr_ps ((float) h[4 * j], (float) h[4 * j + 1], (float) h[4 * j + 2], (float) h[4 * j + 3]);
-                    rows[j] = _mm256_set_m128 (row, row);
-                }
+                    rows[j] = _mm256_setr_pd (h[4 * j], h[4 * j + 1], h[4 * j + 2], h[4 * j + 3]);
             }
 
-            alignas (32) __m256 rows[kRows] {};
-            alignas (32) float hL[2 * kRows] {}, hR[2 * kRows] {};
+            alignas (32) __m256d rows[kRows] {};
+            alignas (32) double hL[2 * kRows] {}, hR[2 * kRows] {};
             int w = 0;
         };
 
@@ -211,19 +215,19 @@ namespace BubLeonDSP
             {
                 wMax = std::max (maxWindow, 3);
                 histMask = nextPow2 (4 * wMax + 16) - 1;
-                hist.assign ((size_t) histMask + 1, 1.0f);
+                hist.assign ((size_t) histMask + 1, 1.0);
                 dqMask = nextPow2 (wMax + 2) - 1;
                 dqIdx.assign ((size_t) dqMask + 1, 0);
-                dqVal.assign ((size_t) dqMask + 1, 1.0f);
-                ring1.assign ((size_t) wMax + 1, 1.0f);
-                ring2.assign ((size_t) wMax + 1, 1.0f);
+                dqVal.assign ((size_t) dqMask + 1, 1.0);
+                ring1.assign ((size_t) wMax + 1, 1.0);
+                ring2.assign ((size_t) wMax + 1, 1.0);
                 W = std::min (W, wMax);
                 reset();
             }
 
             void reset() noexcept
             {
-                std::fill (hist.begin(), hist.end(), 1.0f);
+                std::fill (hist.begin(), hist.end(), 1.0);
                 histPos = 0;
                 resetChain();
             }
@@ -238,7 +242,7 @@ namespace BubLeonDSP
 
             int getMaxWindow() const noexcept { return wMax; }
 
-            inline float process (float g) noexcept
+            inline double process (double g) noexcept
             {
                 hist[(size_t) (histPos & histMask)] = g;
                 ++histPos;
@@ -250,8 +254,8 @@ namespace BubLeonDSP
             {
                 B1 = (W + 1) / 2; B2 = W + 1 - B1;
                 dqHead = dqTail = 0; counter = 0;
-                std::fill (ring1.begin(), ring1.end(), 1.0f);
-                std::fill (ring2.begin(), ring2.end(), 1.0f);
+                std::fill (ring1.begin(), ring1.end(), 1.0);
+                std::fill (ring2.begin(), ring2.end(), 1.0);
                 p1 = p2 = 0; sum1 = (double) B1; sum2 = (double) B2;
             }
 
@@ -264,7 +268,7 @@ namespace BubLeonDSP
                     (void) chain (hist[(size_t) ((histPos - k - (wMax - W)) & histMask)]);
             }
 
-            inline float chain (float v) noexcept
+            inline double chain (double v) noexcept
             {
                 const int64_t n = counter++;
                 while (dqTail != dqHead && dqVal[(size_t) ((dqTail - 1) & dqMask)] >= v) --dqTail;
@@ -272,15 +276,15 @@ namespace BubLeonDSP
                 dqVal[(size_t) (dqTail & dqMask)] = v;
                 ++dqTail;
                 if (dqIdx[(size_t) (dqHead & dqMask)] <= n - W) ++dqHead;
-                const float m = dqVal[(size_t) (dqHead & dqMask)];
+                const double m = dqVal[(size_t) (dqHead & dqMask)];
 
-                sum1 += (double) m - (double) ring1[(size_t) p1];
+                sum1 += m - ring1[(size_t) p1];
                 ring1[(size_t) p1] = m; if (++p1 >= B1) p1 = 0;
-                const float a1 = (float) (sum1 / B1);
+                const double a1 = sum1 / B1;
 
-                sum2 += (double) a1 - (double) ring2[(size_t) p2];
+                sum2 += a1 - ring2[(size_t) p2];
                 ring2[(size_t) p2] = a1; if (++p2 >= B2) p2 = 0;
-                return std::min ((float) (sum2 / B2), 1.0f);
+                return std::min (sum2 / B2, 1.0);
             }
 
             int wMax = 3, W = 3, B1 = 2, B2 = 2;
@@ -288,7 +292,7 @@ namespace BubLeonDSP
             int64_t dqHead = 0, dqTail = 0, dqMask = 0;
             int p1 = 0, p2 = 0;
             double sum1 = 2.0, sum2 = 2.0;
-            std::vector<float> hist, dqVal, ring1, ring2;
+            std::vector<double> hist, dqVal, ring1, ring2;
             std::vector<int64_t> dqIdx;
         };
 
@@ -308,74 +312,73 @@ namespace BubLeonDSP
 
             void reset() noexcept { x1 = 0.0; lc1 = 0.0; dPrev = -1.0; }
 
-            inline float process (float xf, double d, double invTanhD) noexcept
+            inline double process (double x, double d, double invTanhD) noexcept
             {
                 if (d != dPrev) { lc1 = logCosh (d * x1); dPrev = d; }
-                const double x  = xf;
                 const double dx = x - x1;
                 const double lc = logCosh (d * x);
                 double y;
-                if (std::fabs (dx) > 1.0e-5) y = (lc - lc1) / (d * dx) * invTanhD;
+                if (std::fabs (dx) > 1.0e-7) y = (lc - lc1) / (d * dx) * invTanhD;
                 else                         y = std::tanh (d * 0.5 * (x + x1)) * invTanhD;   // ill-conditioned fallback
                 x1 = x; lc1 = lc;
-                return static_cast<float> (y);
+                return y;
             }
         };
 
         // ---------------------------------------------------------------------------
-        // TPDF dither with error-feedback noise shaping (Wannamaker E/F-weighted FIRs).
+        // TPDF dither with error-feedback noise shaping (Wannamaker E/F-weighted FIRs), 64-bit.
         // ---------------------------------------------------------------------------
         class ShapedDither
         {
         public:
-            void reset() noexcept { e.fill (0.0f); rPrev = 0.0f; }
+            void reset() noexcept { e.fill (0.0); rPrev = 0.0; }
 
             void configure (BitDepth bits, NoiseShapingCurve curve) noexcept
             {
                 enabled = bits != BitDepth::Float32;
-                lsb = bits == BitDepth::Bits16 ? 1.0f / 32768.0f : 1.0f / 8388608.0f;
-                static constexpr float eW[5] = { 2.033f, -2.165f, 1.959f, -1.590f, 0.6149f };
-                static constexpr float fW[9] = { 2.412f, -3.370f, 3.937f, -4.174f, 3.353f, -2.205f, 1.281f, -0.569f, 0.0847f };
-                h.fill (0.0f); order = 0; hpTpdf = false;
+                lsb = bits == BitDepth::Bits16 ? 1.0 / 32768.0 : 1.0 / 8388608.0;
+                static constexpr double eW[5] = { 2.033, -2.165, 1.959, -1.590, 0.6149 };
+                static constexpr double fW[9] = { 2.412, -3.370, 3.937, -4.174, 3.353, -2.205, 1.281, -0.569, 0.0847 };
+                h.fill (0.0); order = 0; hpTpdf = false;
                 if (curve == NoiseShapingCurve::FlatHighPassTPDF)      { hpTpdf = true; }
                 else if (curve == NoiseShapingCurve::ModifiedEWeight)  { std::copy (eW, eW + 5, h.begin()); order = 5; }
                 else                                                   { std::copy (fW, fW + 9, h.begin()); order = 9; }
             }
 
-            float getLsb() const noexcept { return enabled ? lsb : 0.0f; }
-            bool  isEnabled() const noexcept { return enabled; }
+            double getLsb() const noexcept { return enabled ? lsb : 0.0; }
+            bool   isEnabled() const noexcept { return enabled; }
 
-            inline float process (float x, uint32_t& rng) noexcept
+            inline double process (double x, uint32_t& rng) noexcept
             {
                 if (! enabled) return x;
 
-                float fb = 0.0f;
+                double fb = 0.0;
                 for (int k = 0; k < order; ++k) fb += h[(size_t) k] * e[(size_t) k];
-                const float v = x - fb;
+                const double v = x - fb;
 
-                float d;
-                if (hpTpdf) { const float r = uniform (rng) - 0.5f; d = (r - rPrev) * lsb; rPrev = r; }
+                double d;
+                if (hpTpdf) { const double r = uniform (rng) - 0.5; d = (r - rPrev) * lsb; rPrev = r; }
                 else        { d = (uniform (rng) - uniform (rng)) * lsb; }
 
-                float q = std::nearbyint ((v + d) / lsb) * lsb;
-                q = std::clamp (q, -1.0f, 1.0f - lsb);
-                const float err = std::clamp (q - v, -32.0f * lsb, 32.0f * lsb);   // keeps the loop stable on clip
+                double q = std::nearbyint ((v + d) / lsb) * lsb;
+                q = std::clamp (q, -1.0, 1.0 - lsb);
+                const double err = std::clamp (q - v, -32.0 * lsb, 32.0 * lsb);   // keeps the loop stable on clip
                 for (int k = 8; k > 0; --k) e[(size_t) k] = e[(size_t) k - 1];
                 e[0] = err;
                 return q;
             }
 
-            static inline float uniform (uint32_t& s) noexcept
+            static inline double uniform (uint32_t& s) noexcept
             {
                 s ^= s << 13; s ^= s >> 17; s ^= s << 5;
-                return static_cast<float> (s >> 8) * (1.0f / 16777216.0f);
+                return static_cast<double> (s) * (1.0 / 4294967296.0);
             }
 
         private:
-            std::array<float, 9> h {}, e {};
+            std::array<double, 9> h {}, e {};
             int order = 0;
             bool enabled = false, hpTpdf = false;
-            float lsb = 1.0f / 8388608.0f, rPrev = 0.0f;
+            double lsb = 1.0 / 8388608.0, rPrev = 0.0;
         };
     } // namespace detail
 
@@ -468,49 +471,49 @@ namespace BubLeonDSP
         int getInternalLatencyBaseSamples() const noexcept { return latencyBase; }
 
         // Called once per sample at this instance's internal rate (4x or 1x).
-        void processOversampledStereo (float& left, float& right) noexcept
+        void processOversampledStereo (double& left, double& right) noexcept
         {
             inGain += smoothCoeff * (inGainTarget - inGain);
             ceil   += smoothCoeff * (ceilTarget - ceil);
             if (! smoothSettled)
                 glideControls();
 
-            float l = left * inGain, r = right * inGain;
+            double l = left * inGain, r = right * inGain;
 
             // ---- 1. LR4 sub-band split ------------------------------------------------
-            float lfL, lfR, hfL, hfR;
+            double lfL, lfR, hfL, hfR;
             split.process (l, r, lfL, lfR, hfL, hfR);
 
             // ---- 2. LF: elliptical sub mono + independent LF ceiling -------------------
             if (msParams.msModeEnabled)
             {
-                const float m = 0.5f * (lfL + lfR);
-                const float s = 0.5f * (lfL - lfR) * sideLowKeep;
+                const double m = 0.5f * (lfL + lfR);
+                const double s = 0.5f * (lfL - lfR) * sideLowKeep;
                 lfL = m + s; lfR = m - s;
             }
-            const float lfPk = std::max (std::fabs (lfL), std::fabs (lfR));
+            const double lfPk = std::max (std::fabs (lfL), std::fabs (lfR));
             lfEnv = lfPk > lfEnv ? lfPk : lfEnv * lfEnvRelease;
-            const float lfTarget = std::min (1.0f, ceil * lfHeadroom / std::max (lfEnv, 1.0e-9f));
+            const double lfTarget = std::min (1.0, ceil * lfHeadroom / std::max (lfEnv, 1.0e-12));
             gLf += (lfTarget < gLf ? lfAttack : lfRelease) * (lfTarget - gLf);
 
             // ---- 3. HF: coupling + transient punch ------------------------------------
-            const float gHf = 1.0f - coupling * (1.0f - gLf);
-            const float hfPk = std::max (std::fabs (hfL), std::fabs (hfR)) + 1.0e-9f;
+            const double gHf = 1.0f - coupling * (1.0f - gLf);
+            const double hfPk = std::max (std::fabs (hfL), std::fabs (hfR)) + 1.0e-9f;
             fastEnv += (hfPk > fastEnv ? punchFastA : punchFastR) * (hfPk - fastEnv);
             slowEnv += (hfPk > slowEnv ? punchSlowA : punchSlowR) * (hfPk - slowEnv);
-            float gPunch = 1.0f;
+            double gPunch = 1.0f;
             if (punchAmount > 0.0f)
             {
-                const float ratioDb = std::clamp (detail::linToDb (fastEnv / slowEnv), 0.0f, 6.0f);
+                const double ratioDb = std::clamp (detail::linToDb (fastEnv / slowEnv), 0.0, 6.0);
                 gPunch = detail::dbToLin (punchAmount * 0.5f * ratioDb);    // up to +3 dB on onsets
             }
 
-            float yL = lfL * gLf + hfL * gHf * gPunch;
-            float yR = lfR * gLf + hfR * gHf * gPunch;
+            double yL = lfL * gLf + hfL * gHf * gPunch;
+            double yR = lfR * gLf + hfR * gHf * gPunch;
 
             // ---- 4. ADAA Enhance (M/S or L/R) + output width --------------------------
             {
-                float m = 0.5f * (yL + yR), s = 0.5f * (yL - yR);
+                double m = 0.5f * (yL + yR), s = 0.5f * (yL - yR);
                 if (msParams.msModeEnabled)
                 {
                     m = adaaA.process (m, driveMid,  invTanhMid);
@@ -528,10 +531,10 @@ namespace BubLeonDSP
             }
 
             // ---- 5. True-peak detection -----------------------------------------------
-            float pkL, pkR;
+            double pkL, pkR;
             if (useTpInterpolator)
             {
-                float tL, tR;
+                double tL, tR;
                 tpDetect.process (yL, yR, tL, tR);
                 pkL = std::max (tL, prevPkL); pkR = std::max (tR, prevPkR);   // 2-sample hold: covers sub-sample skew
                 prevPkL = tL; prevPkR = tR;
@@ -542,30 +545,30 @@ namespace BubLeonDSP
             }
 
             // ---- 6. Crest-factor auto-release ----------------------------------------
-            const float pk = std::max (pkL, pkR);
+            const double pk = std::max (pkL, pkR);
             crestPeak = pk > crestPeak ? pk : crestPeak * crestPeakRel;
             crestPow += crestRms * (pk * pk - crestPow);
             if (++crestCounter >= 32)
             {
                 crestCounter = 0;
-                const float crestDb = 10.0f * std::log10 ((crestPeak * crestPeak + 1.0e-12f) / (crestPow + 1.0e-12f));
-                const float t = std::clamp ((crestDb - 4.0f) / 10.0f, 0.0f, 1.0f);
+                const double crestDb = 10.0f * std::log10 ((crestPeak * crestPeak + 1.0e-12f) / (crestPow + 1.0e-12f));
+                const double t = std::clamp ((crestDb - 4.0) / 10.0, 0.0, 1.0);
                 updateReleaseCoeff (1.6f + t * (0.35f - 1.6f));
             }
 
             // ---- 7. Required gain, link, release envelope, Lemire lookahead ----------
-            const float c = ceil;
-            float reqL = pkL > c ? c / pkL : 1.0f;
-            float reqR = pkR > c ? c / pkR : 1.0f;
-            const float linked = std::min (reqL, reqR);
+            const double c = ceil;
+            double reqL = pkL > c ? c / pkL : 1.0f;
+            double reqR = pkR > c ? c / pkR : 1.0f;
+            const double linked = std::min (reqL, reqR);
             reqL += link * (linked - reqL);
             reqR += link * (linked - reqR);
 
             envL = reqL < envL ? reqL : envL + releaseCoeff * (reqL - envL);
             envR = reqR < envR ? reqR : envR + releaseCoeff * (reqR - envR);
 
-            const float sL = gainL.process (envL);
-            const float sR = gainR.process (envR);
+            const double sL = gainL.process (envL);
+            const double sR = gainR.process (envR);
 
             // ---- 8. Lookahead delay + gain + safety clamp -----------------------------
             delayL[(size_t) (delayPos & delayMask)] = yL;
@@ -576,13 +579,13 @@ namespace BubLeonDSP
             right = std::clamp (delayR[(size_t) (rd & delayMask)] * sR, -c, c);
 
             // ---- telemetry ------------------------------------------------------------
-            const float g = std::min (sL, sR) * guardGain;
+            const double g = std::min (sL, sR) * guardGain;
             grHold = g < grHold ? g : grHold + grHoldDecay * (g - grHold);
             lastLf = gLf; lastHf = gHf; lastPunch = gPunch;
         }
 
         // Base-rate output stage: sample-peak safety, output true-peak meter, auto-blanking, dither.
-        void processBaseRateDitherStereo (float& left, float& right) noexcept
+        void processBaseRateDitherStereo (double& left, double& right) noexcept
         {
             // Safety ceiling tracks the limiter's own smoothed ceiling as it emerges from the
             // lookahead delay: rises instantly, falls only after the latency, with the same 20 ms glide.
@@ -591,14 +594,14 @@ namespace BubLeonDSP
             else                          clampCeil += clampSmooth * (ceilTarget - clampCeil);
             if (useGuard)
             {
-                float tL, tR;
+                double tL, tR;
                 guardTp.process (left, right, tL, tR);
-                const float pkL = std::max (tL, guardPrevL), pkR = std::max (tR, guardPrevR);
+                const double pkL = std::max (tL, guardPrevL), pkR = std::max (tR, guardPrevR);
                 guardPrevL = tL; guardPrevR = tR;
-                const float gc = clampCeil;
-                const float req = std::min (pkL > gc ? gc / pkL : 1.0f, pkR > gc ? gc / pkR : 1.0f);  // linked: no image shift
+                const double gc = clampCeil;
+                const double req = std::min (pkL > gc ? gc / pkL : 1.0f, pkR > gc ? gc / pkR : 1.0f);  // linked: no image shift
                 guardEnvL = req < guardEnvL ? req : guardEnvL + guardRelease * (req - guardEnvL);
-                const float g = guardL.process (guardEnvL);
+                const double g = guardL.process (guardEnvL);
 
                 guardDelayL[(size_t) (guardPos & guardMask)] = left;
                 guardDelayR[(size_t) (guardPos & guardMask)] = right;
@@ -609,13 +612,13 @@ namespace BubLeonDSP
                 guardGain = g;
             }
 
-            const float c = clampCeil * 1.0001f;
+            const double c = clampCeil * 1.0001f;
             left  = std::clamp (left,  -c, c);
             right = std::clamp (right, -c, c);
 
-            float tL, tR;
+            double tL, tR;
             tpMeter.process (left, right, tL, tR);
-            const float tp = std::max (tL, tR);
+            const double tp = std::max (tL, tR);
             tpHold = tp > tpHold ? tp : tpHold * tpHoldDecay;
 
             if (! ditherL.isEnabled())
@@ -638,11 +641,11 @@ namespace BubLeonDSP
         LimiterTelemetry getTelemetry() const noexcept
         {
             LimiterTelemetry t;
-            t.gainReductionDb   = -detail::linToDb (grHold);
-            t.lfGainReductionDb = -detail::linToDb (lastLf);
-            t.hfGainReductionDb = -detail::linToDb (lastHf);
-            t.punchGainDb       =  detail::linToDb (lastPunch);
-            t.outputTruePeakDb  =  tpHold > 1.0e-6f ? detail::linToDb (tpHold) : -120.0f;
+            t.gainReductionDb   = (float) -detail::linToDb (grHold);
+            t.lfGainReductionDb = (float) -detail::linToDb (lastLf);
+            t.hfGainReductionDb = (float) -detail::linToDb (lastHf);
+            t.punchGainDb       = (float)  detail::linToDb (lastPunch);
+            t.outputTruePeakDb  = tpHold > 1.0e-6 ? (float) detail::linToDb (tpHold) : -120.0f;
             return t;
         }
 
@@ -655,7 +658,7 @@ namespace BubLeonDSP
 
             inGainTarget = detail::dbToLin (std::clamp (params.inputGainDb, -24.0f, 36.0f));
             // -3 LSB pad keeps the requantiser clear of the ceiling
-            const float newCeil = std::max (detail::dbToLin (std::clamp (params.thresholdDb, -30.0f, 0.0f)) - 3.0f * ditherL.getLsb(), 0.01f);
+            const double newCeil = std::max ((double) detail::dbToLin (std::clamp (params.thresholdDb, -30.0f, 0.0f)) - 3.0 * ditherL.getLsb(), 0.01);
             if (newCeil < ceilTarget - 1.0e-7f)
                 clampHold = latencyBase + 64;              // + oversampler group delay margin
             ceilTarget = newCeil;
@@ -671,7 +674,7 @@ namespace BubLeonDSP
             lfRelease   = detail::msToCoeff (std::max (params.releaseMs, 10.0f), fs);
             updateReleaseCoeff (lastReleaseFactor);
 
-            const float amt = std::clamp (params.enhanceAmount, 0.0f, 1.25f);
+            const double amt = std::clamp (params.enhanceAmount, 0.0f, 1.25f);
             driveMidT   = 0.05 + 3.2 * amt;
             driveSideT  = driveMidT * (1.0 + std::clamp (msParams.enhanceSideBoost, 0.0f, 1.0f));
 
@@ -684,7 +687,7 @@ namespace BubLeonDSP
         // Gain-like controls glide over ~20 ms so automation and preset changes never zipper.
         void glideControls() noexcept
         {
-            const float c = smoothCoeff;
+            const double c = smoothCoeff;
             const double cd = c;
             lfHeadroom  += c * (lfHeadroomT - lfHeadroom);
             coupling    += c * (couplingT - coupling);
@@ -697,10 +700,10 @@ namespace BubLeonDSP
             invTanhMid   = 1.0 / std::tanh (driveMid);
             invTanhSide  = 1.0 / std::tanh (driveSide);
 
-            const float err = std::max ({ std::fabs (lfHeadroomT - lfHeadroom), std::fabs (couplingT - coupling),
+            const double err = std::max ({ std::fabs (lfHeadroomT - lfHeadroom), std::fabs (couplingT - coupling),
                                           std::fabs (punchAmountT - punchAmount), std::fabs (linkT - link),
                                           std::fabs (sideLowKeepT - sideLowKeep), std::fabs (widthT - width),
-                                          (float) std::fabs (driveMidT - driveMid), (float) std::fabs (driveSideT - driveSide) });
+                                          (double) std::fabs (driveMidT - driveMid), (double) std::fabs (driveSideT - driveSide) });
             if (err < 1.0e-5f) snapControls();
         }
 
@@ -714,10 +717,10 @@ namespace BubLeonDSP
             smoothSettled = true;
         }
 
-        void updateReleaseCoeff (float crestFactor) noexcept
+        void updateReleaseCoeff (double crestFactor) noexcept
         {
             lastReleaseFactor = crestFactor;
-            const float ms = std::max (params.releaseMs, 1.0f) * (1.0f + std::clamp (params.autoRelease, 0.0f, 1.0f) * (crestFactor - 1.0f));
+            const double ms = std::max (params.releaseMs, 1.0f) * (1.0f + std::clamp (params.autoRelease, 0.0f, 1.0f) * (crestFactor - 1.0f));
             releaseCoeff = detail::msToCoeff (ms, fs);
         }
 
@@ -734,35 +737,35 @@ namespace BubLeonDSP
         detail::AdaaTanh       adaaA, adaaB;
         detail::ShapedDither   ditherL, ditherR;
 
-        std::vector<float> delayL, delayR;
+        std::vector<double> delayL, delayR;
 
         // base-rate true-peak guard (4x engine)
         bool useGuard = false;
         int  guardW = 0, guardLatency = 0;
         detail::LookaheadGain guardL, guardR;
-        std::vector<float> guardDelayL, guardDelayR;
+        std::vector<double> guardDelayL, guardDelayR;
         int64_t guardPos = 0, guardMask = 0;
-        float guardEnvL = 1.0f, guardEnvR = 1.0f, guardPrevL = 0.0f, guardPrevR = 0.0f, guardRelease = 0.01f, guardGain = 1.0f;
+        double guardEnvL = 1.0f, guardEnvR = 1.0f, guardPrevL = 0.0f, guardPrevR = 0.0f, guardRelease = 0.01f, guardGain = 1.0f;
         int64_t delayPos = 0, delayMask = 0;
 
-        float inGain = 1.0f, inGainTarget = 1.0f, ceil = 0.989f, ceilTarget = 0.989f, smoothCoeff = 0.001f;
-        float clampCeil = 0.989f, clampSmooth = 0.001f;
+        double inGain = 1.0f, inGainTarget = 1.0f, ceil = 0.989f, ceilTarget = 0.989f, smoothCoeff = 0.001f;
+        double clampCeil = 0.989f, clampSmooth = 0.001f;
         int   clampHold = 0;
-        float lfHeadroom = 0.78f, coupling = 0.15f, punchAmount = 0.2f, link = 0.35f, sideLowKeep = 0.35f, width = 1.0f;
+        double lfHeadroom = 0.78f, coupling = 0.15f, punchAmount = 0.2f, link = 0.35f, sideLowKeep = 0.35f, width = 1.0f;
         double driveMid = 1.0, driveSide = 1.0, invTanhMid = 1.0, invTanhSide = 1.0;
-        float lfHeadroomT = 0.78f, couplingT = 0.15f, punchAmountT = 0.2f, linkT = 0.35f, sideLowKeepT = 0.35f, widthT = 1.0f;
+        double lfHeadroomT = 0.78f, couplingT = 0.15f, punchAmountT = 0.2f, linkT = 0.35f, sideLowKeepT = 0.35f, widthT = 1.0f;
         double driveMidT = 1.0, driveSideT = 1.0;
         bool smoothSettled = false;
 
-        float envL = 1.0f, envR = 1.0f, releaseCoeff = 0.001f, lastReleaseFactor = 1.0f;
-        float lfEnv = 0.0f, lfEnvRelease = 0.999f, gLf = 1.0f, lfAttack = 0.01f, lfRelease = 0.001f;
-        float fastEnv = 1.0e-6f, slowEnv = 1.0e-6f, punchFastA = 0, punchFastR = 0, punchSlowA = 0, punchSlowR = 0;
-        float crestPeak = 0.0f, crestPow = 1.0e-9f, crestPeakRel = 0.999f, crestRms = 0.001f;
+        double envL = 1.0f, envR = 1.0f, releaseCoeff = 0.001f, lastReleaseFactor = 1.0f;
+        double lfEnv = 0.0f, lfEnvRelease = 0.999f, gLf = 1.0f, lfAttack = 0.01f, lfRelease = 0.001f;
+        double fastEnv = 1.0e-6f, slowEnv = 1.0e-6f, punchFastA = 0, punchFastR = 0, punchSlowA = 0, punchSlowR = 0;
+        double crestPeak = 0.0f, crestPow = 1.0e-9f, crestPeakRel = 0.999f, crestRms = 0.001f;
         int   crestCounter = 0;
-        float prevPkL = 0.0f, prevPkR = 0.0f;
+        double prevPkL = 0.0f, prevPkR = 0.0f;
 
-        float grHold = 1.0f, grHoldDecay = 0.001f, lastLf = 1.0f, lastHf = 1.0f, lastPunch = 1.0f;
-        float tpHold = 0.0f, tpHoldDecay = 0.9999f;
+        double grHold = 1.0f, grHoldDecay = 0.001f, lastLf = 1.0f, lastHf = 1.0f, lastPunch = 1.0f;
+        double tpHold = 0.0f, tpHoldDecay = 0.9999f;
 
         bool autoBlanking = true;
         int silentCount = 0, silenceLimit = 12000;

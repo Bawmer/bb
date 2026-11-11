@@ -43,6 +43,8 @@ public:
     void releaseResources() override;
     bool isBusesLayoutSupported(const BusesLayout& layouts) const override;
     void processBlock(juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
+    void processBlock(juce::AudioBuffer<double>&, juce::MidiBuffer&) override;
+    bool supportsDoublePrecisionProcessing() const override { return true; }   // native 64-bit host I/O
 
     juce::AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override { return true; }
@@ -79,17 +81,19 @@ public:
 private:
     void syncParametersFromAPVTS() noexcept;
     void updateLatencyForEngine() noexcept;
-    void processChunk(juce::AudioBuffer<float>& chunk) noexcept;
+    template <typename SampleType> void processHostBlock(juce::AudioBuffer<SampleType>& buffer) noexcept;
+    void processChunk(juce::AudioBuffer<double>& chunk) noexcept;     // 64-bit core path
 
     // 4x Linear-Phase FIR Oversampler for True-Peak / ADAA Precision
-    juce::dsp::Oversampling<float> oversampler4x {
-        2, 2, juce::dsp::Oversampling<float>::filterHalfBandFIREquiripple, true, true  // integer latency for exact PDC
+    juce::dsp::Oversampling<double> oversampler4x {
+        2, 2, juce::dsp::Oversampling<double>::filterHalfBandFIREquiripple, true, true  // 64-bit, integer latency for exact PDC
     };
 
     BubLeonDSP::OxfordUltraLimiter  limiter4x;
     BubLeonDSP::OxfordUltraLimiter  limiter1x; // Low-latency live tracking engine
     BubLeonDSP::LoudnessAnalyzerITU loudnessAnalyzer;
-    juce::AudioBuffer<float>        dryInputCopy;
+    juce::AudioBuffer<double>       dryInputCopy;
+    juce::AudioBuffer<double>       workBuffer;      // 64-bit scratch for 32-bit hosts
 
     bool lastOsActive = true;
     double currentSampleRate = 48000.0;
