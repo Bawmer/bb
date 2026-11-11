@@ -1,0 +1,68 @@
+name: Build Windows x64 VST3
+
+on:
+  push:
+    branches: [ main, "oxford-ultra-limiter*" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: windows-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure (newest MSVC on the runner, x64, JUCE 8.0.4 via FetchContent)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force release | Out-Null
+          cmake --version; cmake -S . -B build -A x64 2>&1 | Tee-Object release\configure.log
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Build Release
+        timeout-minutes: 25
+        shell: pwsh
+        run: |
+          cmake --build build --config Release --target BubLeonOxfordUltra_VST3 BubLeonOxfordUltra_Standalone --parallel 2>&1 | Tee-Object release\build.log
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory dist | Out-Null
+          Copy-Item -Recurse "build\BubLeonOxfordUltra_artefacts\Release\VST3\BL Oxford Ultra Limiter.vst3" dist\
+          Copy-Item "build\BubLeonOxfordUltra_artefacts\Release\Standalone\BL Oxford Ultra Limiter.exe" dist\
+          Compress-Archive -Force -Path dist\* -DestinationPath release\BL_Oxford_Ultra_Limiter_Win64.zip
+
+      - name: Validate with pluginval (strictness 8)
+        timeout-minutes: 12
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          Invoke-WebRequest https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_Windows.zip -OutFile pluginval.zip
+          Expand-Archive pluginval.zip -DestinationPath pluginval
+          .\pluginval\pluginval.exe --strictness-level 8 --skip-gui-tests --validate-in-process --repeat 3 --randomise "build\BubLeonOxfordUltra_artefacts\Release\VST3\BL Oxford Ultra Limiter.vst3" 2>&1 | Tee-Object release\pluginval.log
+          "exit code: $LASTEXITCODE" | Add-Content release\pluginval.log
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: BL_Oxford_Ultra_Limiter_Win64
+          path: release
+
+      - name: Commit build + logs back to the branch
+        if: always()
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f release
+          git commit -m "CI: Windows x64 build ${{ job.status }} [skip ci]"
+          git push
