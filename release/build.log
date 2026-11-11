@@ -1,0 +1,69 @@
+MSBuild version 18.11.1-1.26513.3+940033be3 for .NET Framework
+
+  Checking File Globs
+  1>Checking Build System
+  Generating BubLeonOxfordUltra_artefacts/JuceLibraryCode/BubLeonOxfordUltra_resources.rc
+  Building Custom Rule D:/a/bb/bb/CMakeLists.txt
+  BubLeonOxfordUltra_rc_lib.vcxproj -> D:\a\bb\bb\build\BubLeonOxfordUltra_rc_lib.dir\Release\BubLeonOxfordUltra_rc_lib.lib
+  Generating juce_binarydata_BubLeonOxfordUltraAssets/JuceLibraryCode/BinaryData1.cpp, juce_binarydata_BubLeonOxfordUltraAssets/JuceLibraryCode/BinaryData.h
+  Building Custom Rule D:/a/bb/bb/CMakeLists.txt
+  BinaryData1.cpp
+  Building Custom Rule D:/a/bb/bb/CMakeLists.txt
+  juce_VST3ManifestHelper.cpp
+  BubLeonOxfordUltraAssets.vcxproj -> D:\a\bb\bb\build\Release\BubLeonOxfordUltraAssets.lib
+  Building Custom Rule D:/a/bb/bb/CMakeLists.txt
+  PluginProcessor.cpp
+  PluginEditor.cpp
+  juce_audio_processors.cpp
+  juce_audio_processors_ara.cpp
+  juce_audio_processors_lv2_libs.cpp
+  juce_gui_extra.cpp
+  juce_gui_basics.cpp
+  juce_graphics.cpp
+  juce_graphics_Harfbuzz.cpp
+  juce_events.cpp
+  juce_vst3_helper.vcxproj -> D:\a\bb\bb\build\Release\juce_vst3_helper.exe
+D:\a\bb\bb\build\_deps\juce-src\modules\juce_gui_basics\juce_gui_basics.cpp(61): warning : This version of JUCE does not use the splash screen, the flag JUCE_DISPLAY_SPLASH_SCREEN is ignored [D:\a\bb\bb\build\BubLeonOxfordUltra.vcxproj]
+  juce_core.cpp
+  juce_core_CompilationTime.cpp
+  juce_data_structures.cpp
+  juce_audio_basics.cpp
+  juce_audio_utils.cpp
+  juce_audio_formats.cpp
+  juce_audio_devices.cpp
+  juce_dsp.cpp
+  juce_graphics_Sheenbidi.c
+  BubLeonOxfordUltra.vcxproj -> D:\a\bb\bb\build\BubLeonOxfordUltra_artefacts\Release\BL Oxford Ultra Limiter_SharedCode.lib
+  Building Custom Rule D:/a/bb/bb/CMakeLists.txt
+  juce_audio_plugin_client_AAX.cpp
+  juce_audio_plugin_client_AAX_utils.cpp
+  juce_audio_plugin_client_ARA.cpp
+  juce_audio_plugin_client_LV2.cpp
+  juce_audio_plugin_client_Standalone.cpp
+  juce_audio_plugin_client_Unity.cpp
+  juce_audio_plugin_client_VST2.cpp
+  juce_audio_plugin_client_VST3.cpp
+     Creating library D:/a/bb/bb/build/BubLeonOxfordUltra_artefacts/Release/VST3/BL Oxford Ultra Limiter.lib and object D:/a/bb/bb/build/BubLeonOxfordUltra_artefacts/Release/VST3/BL Oxford Ultra Limiter.exp
+  Generating code
+  Finished generating code
+  BubLeonOxfordUltra_VST3.vcxproj -> D:\a\bb\bb\build\BubLeonOxfordUltra_artefacts\Release\VST3\BL Oxford Ultra Limiter.vst3\Contents\x86_64-win\BL Oxford Ultra Limiter.vst3
+  removing moduleinfo.json
+  creating D:/a/bb/bb/build/BubLeonOxfordUltra_artefacts/Release/VST3/BL Oxford Ultra Limiter.vst3/Contents/Resources/moduleinfo.json
+MSBuild version 18.11.1-1.26513.3+940033be3 for .NET Framework
+
+  Checking File Globs
+  BubLeonOxfordUltra_rc_lib.vcxproj -> D:\a\bb\bb\build\BubLeonOxfordUltra_rc_lib.dir\Release\BubLeonOxfordUltra_rc_lib.lib
+  BubLeonOxfordUltraAssets.vcxproj -> D:\a\bb\bb\build\Release\BubLeonOxfordUltraAssets.lib
+  BubLeonOxfordUltra.vcxproj -> D:\a\bb\bb\build\BubLeonOxfordUltra_artefacts\Release\BL Oxford Ultra Limiter_SharedCode.lib
+  Building Custom Rule D:/a/bb/bb/CMakeLists.txt
+  juce_audio_plugin_client_AAX.cpp
+  juce_audio_plugin_client_AAX_utils.cpp
+  juce_audio_plugin_client_ARA.cpp
+  juce_audio_plugin_client_LV2.cpp
+  juce_audio_plugin_client_Standalone.cpp
+  juce_audio_plugin_client_Unity.cpp
+  juce_audio_plugin_client_VST2.cpp
+  juce_audio_plugin_client_VST3.cpp
+  Generating code
+  Finished generating code
+  BubLeonOxfordUltra_Standalone.vcxproj -> D:\a\bb\bb\build\BubLeonOxfordUltra_artefacts\Release\Standalone\BL Oxford Ultra Limiter.exe
