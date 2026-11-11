@@ -8,9 +8,14 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: windows-build-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: windows-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
@@ -22,6 +27,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit 1 }
 
       - name: Build Release
+        timeout-minutes: 25
         shell: pwsh
         run: |
           cmake --build build --config Release --target BubLeonOxfordUltra_VST3 BubLeonOxfordUltra_Standalone --parallel 2>&1 | Tee-Object release\build.log
@@ -36,6 +42,7 @@ jobs:
           Compress-Archive -Force -Path dist\* -DestinationPath release\BL_Oxford_Ultra_Limiter_Win64.zip
 
       - name: Validate with pluginval (strictness 8)
+        timeout-minutes: 12
         shell: pwsh
         continue-on-error: true
         run: |
