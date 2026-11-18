@@ -1,0 +1,50 @@
+name: Build Windows x64 VST3
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure (Visual Studio 2022, x64)
+        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DHS_BUILD_PROCESSOR_TEST=ON
+
+      - name: Build Release
+        run: cmake --build build --config Release --parallel
+
+      - name: Engine + processor tests (render, auto key, capture, preview)
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Package
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp -r "build/BubLeonHarmonyStack_artefacts/Release/VST3/Bub Leon Harmony Stack.vst3" dist/
+          cp "build/BubLeonHarmonyStack_artefacts/Release/Standalone/Bub Leon Harmony Stack.exe" dist/
+          cp README.md dist/
+
+      - name: Upload plugin
+        uses: actions/upload-artifact@v4
+        with:
+          name: BubLeonHarmonyStack-Windows-x64
+          path: dist/
+
+      - name: Validate with pluginval (strictness 10)
+        shell: bash
+        run: |
+          curl -sSL -o pluginval.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_Windows.zip
+          unzip -q pluginval.zip -d pluginval
+          ./pluginval/pluginval.exe --strictness-level 10 --validate-in-process --timeout-ms 300000 \
+            --output-dir pluginval-logs "dist/Bub Leon Harmony Stack.vst3"
+
+      - name: Upload pluginval log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pluginval-log
+          path: pluginval-logs/
+          if-no-files-found: ignore

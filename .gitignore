@@ -1,0 +1,4 @@
+build/
+build-*/
+*.raw
+tests/engine_test
