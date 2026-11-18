@@ -37,7 +37,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout HarmonyStackProcessor::creat
     ps.push_back (std::make_unique<AudioParameterChoice> (ParameterID { ID::scale, 1 }, "Scale", scales, 0));
 
     ps.push_back (std::make_unique<AudioParameterFloat> (ParameterID { ID::humanize, 1 }, "Humanize", NormalisableRange<float> (0, 100, 0.1f), 25.0f, pct));
-    ps.push_back (std::make_unique<AudioParameterBool>  (ParameterID { ID::dbl, 1 }, "Double", false));
+    ps.push_back (std::make_unique<AudioParameterChoice> (ParameterID { ID::dbl, 1 }, "Double", StringArray { "Off", "On" }, 0));
     ps.push_back (std::make_unique<AudioParameterFloat> (ParameterID { ID::dblWidth, 1 }, "Double Width", NormalisableRange<float> (0, 100, 0.1f), 60.0f, pct));
     ps.push_back (std::make_unique<AudioParameterFloat> (ParameterID { ID::formant, 1 }, "Formant", NormalisableRange<float> (-6, 6, 0.01f), 0.0f, fmt ("st", 2, true)));
     ps.push_back (std::make_unique<AudioParameterFloat> (ParameterID { ID::breath, 1 }, "Breath", NormalisableRange<float> (0, 100, 0.1f), 25.0f, pct));
@@ -55,7 +55,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout HarmonyStackProcessor::creat
     for (int v = 0; v < 4; ++v)
     {
         const String n = "Voice " + String (v + 1) + " ";
-        ps.push_back (std::make_unique<AudioParameterBool>  (ParameterID { ID::vOn (v), 1 }, n + "On", defOn[v]));
+        ps.push_back (std::make_unique<AudioParameterChoice> (ParameterID { ID::vOn (v), 1 }, n + "On", StringArray { "Off", "On" }, defOn[v] ? 1 : 0));
         ps.push_back (std::make_unique<AudioParameterInt>   (ParameterID { ID::vInt (v), 1 }, n + "Interval", -12, 12, defInt[v]));
         ps.push_back (std::make_unique<AudioParameterFloat> (ParameterID { ID::vLevel (v), 1 }, n + "Level", NormalisableRange<float> (-60, 6, 0.1f, 2.0f), 0.0f, db));
         ps.push_back (std::make_unique<AudioParameterFloat> (ParameterID { ID::vPan (v), 1 }, n + "Pan", NormalisableRange<float> (-100, 100, 0.1f), defPan[v], panAttr));
