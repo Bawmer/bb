@@ -61,9 +61,9 @@ Tip: a dry, tuned, single-take lead tracks best. Put reverb and delay **after** 
 ## Building
 GitHub Actions (`.github/workflows/build-windows.yml`) builds the plugin on every push. It runs the engine tests and pluginval at strictness 10, then uploads the `.vst3` and the standalone `.exe` as an artifact.
 
-To build locally (Visual Studio 2022 and CMake ≥ 3.22):
+To build locally (Visual Studio 2022 or newer, CMake ≥ 3.22):
 ```
-cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+cmake -S . -B build -A x64
 cmake --build build --config Release
 ```
 The output is `build/BubLeonHarmonyStack_artefacts/Release/VST3/Bub Leon Harmony Stack.vst3`.

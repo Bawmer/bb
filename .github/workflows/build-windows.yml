@@ -4,14 +4,21 @@ on:
   push:
   workflow_dispatch:
 
+concurrency:
+  group: windows-build-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   windows:
     runs-on: windows-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
-      - name: Configure (Visual Studio 2022, x64)
-        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DHS_BUILD_PROCESSOR_TEST=ON
+      - name: Configure (newest MSVC on the runner, x64)
+        run: |
+          cmake --version
+          cmake -S . -B build -A x64 -DHS_BUILD_PROCESSOR_TEST=ON
 
       - name: Build Release
         run: cmake --build build --config Release --parallel
