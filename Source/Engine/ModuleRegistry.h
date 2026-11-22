@@ -25,6 +25,7 @@ struct ModuleRegistry
             make<ConsolePreamp>(), make<FourBandEQ>(), make<PassiveTubeEQ>(), make<FETCompressor>(),
             make<OptoCompressor>(), make<VCABusCompressor>(), make<DeEsser>(), make<GateExpander>(),
             make<TapeSaturator>(), make<StereoImager>(), make<TransientShaper>(), make<OutputLimiter>(),
+            make<Vintage76Pre>(),   // appended: existing type indices stay stable
         };
         return e;
     }

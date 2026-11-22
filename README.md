@@ -51,7 +51,7 @@ The window can be resized from 1250 to 2500 px wide (drag the corner), and the s
 
 ### Presets
 
-- **Factory:** 6 banks × 5 presets: Vocal Lead, Vocal Background, Drum Bus, Bass, Mix Bus, Master Glue. They're gain-staged for material around −18 dBFS RMS
+- **Factory:** 32 presets in 6 banks: Vocal Lead, Vocal Background, Drum Bus, Bass, Mix Bus, Master Glue. They're gain-staged for material around −18 dBFS RMS
 - **User racks:** `Documents\BL Audio\Mix Rack\Presets\*.blrack` (full rack state, XML)
 - **Module presets:** `Documents\BL Audio\Mix Rack\Presets\Modules\*.blmod` (one module, values in real units, so they survive future range changes)
 
@@ -63,7 +63,7 @@ Every unit's brushed faceplate is built in. To use your own artwork for a module
 Documents\BL Audio\Mix Rack\Faceplates\<module-id>.png
 ```
 
-e.g. `vca.png`, `tubeeq.png`. Use **438 × 1206 px** (2× the 219 × 603 unit) for sharp results at full size. Knobs, labels and the VU meter are drawn on top: title at the top 50 px, controls from y 56 to 444, the IN/MIX/OUT row at 452 px and the VU meter at 540 px (unit coordinates). Module ids: `preamp eq4 tubeeq fet opto vca deess gate tape imager transient limiter`.
+e.g. `vca.png`, `tubeeq.png`. Use **438 × 1206 px** (2× the 219 × 603 unit) for sharp results at full size. Knobs, labels and the VU meter are drawn on top: title at the top 50 px, controls from y 56 to 444, the IN/MIX/OUT row at 452 px and the VU meter at 540 px (unit coordinates). Module ids: `preamp eq4 tubeeq fet opto vca deess gate tape imager transient limiter v76`.
 
 ## Parameter map (host automation)
 
@@ -207,6 +207,32 @@ P-numbers map to module controls as follows:
 | P2 | Ceiling | -12.0 dB … 0.0 dB | -0.3 dB |
 | P3 | Release | 1 ms … 1.00 s | 80 ms |
 | P4 | True Peak | Off / On | On |
+
+#### Vintage 76 Pre (`v76`, Color, oversampling)
+
+| # | Control | Range | Default |
+|---|---|---|---|
+| P1 | Gain | 0 dB … 30 dB | 6 dB |
+| P2 | Stages | 1 Stage / 2 Stages | 2 Stages |
+| P3 | Iron | 0 % … 100 % | 50 % |
+| P4 | Tube Age | New / Vintage / Worn | Vintage |
+| P5 | Low Cut | Off / 40 Hz / 80 Hz / 120 Hz | Off |
+| P6 | High Cut | Off / 15 kHz / 10 kHz | Off |
+| P7 | Hum | Off / On | Off |
+| P8 | Output | -24.0 dB … 6.0 dB | 0.0 dB |
+
+### Vintage 76 Pre: how the algorithm works
+
+A model of a classic two-stage German broadcast tube preamp (V76-style), built from these stages:
+1. **Input transformer:** the low band (<140 Hz) saturates with the core (amount = *Iron*). It has a slight resonant HF lift.
+2. **Two inverting triode stages:** the gain is split between them, with a coupling capacitor (18 Hz) and Miller roll-off in between. Each triode has a biased transfer curve (even harmonics) and earlier grid-current limiting on the positive half. Because the second stage is inverted, part of the first stage's even harmonics cancel out, as in the real circuit. *1 Stage* gives a simpler, more even-harmonic sound.
+3. **Power-supply sag:** under load, the B+ voltage drops and gain falls a little, giving soft program-dependent compression at high gain.
+4. **Output transformer:** gentler LF saturation and a 14 Hz LF limit.
+5. **Tube Age:** *New / Vintage / Worn* raises bias asymmetry, grid-current limiting, sag and tube hiss (−104 / −92 / −84 dBFS).
+6. **Gain** works in 2 dB steps, like the original's switch. Gain is level-compensated, so *Gain* changes the character and *Output* sets the level.
+7. **Extras:** low cut (40/80/120 Hz), high cut (15/10 kHz) and optional 50 Hz mains hum (−74 dBFS).
+
+It is oversampling-capable (2x/4x recommended at high gain). Measured at −12 dBFS: 0.13 % THD at 0 dB gain, rising to about 17 % at +30 dB.
 
 ## Architecture
 

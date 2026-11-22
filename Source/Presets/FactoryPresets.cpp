@@ -37,6 +37,12 @@ const std::vector<RackPresetDef>& factoryPresets()
             { "opto",    { { "Peak Reduction", 50 }, { "Gain", 3.5 } } },
             { "tape",    { { "Drive", 4 }, { "Speed", 0 }, { "Head Bump", 40 }, { "Wow/Flutter", 8 } } } } },
 
+        { "Vocal Lead", "V76 Broadcast Vocal", {
+            { "v76",     { { "Gain", 12 }, { "Stages", 1 }, { "Iron", 60 }, { "Tube Age", 1 }, { "Low Cut", 2 }, { "Output", -1 } }, 100.0, 0.0, 0.0, 1 },
+            { "opto",    { { "Peak Reduction", 40 }, { "Gain", 2.5 } } },
+            { "eq4",     { { "Low-Mid Gain", -1.5 }, { "Low-Mid Freq", 350 }, { "High Gain", 2 }, { "High Freq", 10000 } } },
+            { "deess",   { { "Frequency", 6500 }, { "Threshold", -32 }, { "Range", 7 } } } } },
+
         //===================================================== Vocal Background
         { "Vocal Background", "Tucked Harmonies", {
             { "eq4",     { { "High Pass", 150 }, { "Low-Mid Gain", -3 }, { "Low-Mid Freq", 400 }, { "High-Mid Gain", -1.5 }, { "High-Mid Freq", 3000 }, { "High Gain", 1.5 } } },
@@ -111,6 +117,11 @@ const std::vector<RackPresetDef>& factoryPresets()
             { "transient", { { "Attack", 20 }, { "Sustain", -15 } } },
             { "vca",       { { "Threshold", -10 }, { "Ratio", 2 }, { "Attack", 3 }, { "Release", 1 }, { "Makeup", 1 } } },
             { "imager",    { { "Mono Bass", 200 } } } } },
+
+        { "Bass", "V76 Fat Bass", {
+            { "v76",     { { "Gain", 18 }, { "Stages", 1 }, { "Iron", 85 }, { "Tube Age", 2 }, { "Low Cut", 1 }, { "Output", -2 } }, 100.0, 0.0, 0.0, 1 },
+            { "fet",     { { "Input", 8 }, { "Output", -3 }, { "Attack", 0.4 }, { "Release", 250 }, { "Ratio", 0 } } },
+            { "eq4",     { { "High Pass", 32 }, { "Low-Mid Gain", -2 }, { "Low-Mid Freq", 300 }, { "High-Mid Gain", 1.5 }, { "High-Mid Freq", 1000 } } } } },
 
         //===================================================== Mix Bus
         { "Mix Bus", "Gentle Glue", {

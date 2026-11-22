@@ -31,6 +31,7 @@ inline juce::Image plate (Faceplate f)
         case Faceplate::Bronze:   return image (BinaryData::plate_bronze_jpg,   BinaryData::plate_bronze_jpgSize);
         case Faceplate::Teal:     return image (BinaryData::plate_teal_jpg,     BinaryData::plate_teal_jpgSize);
         case Faceplate::Red:      return image (BinaryData::plate_red_jpg,      BinaryData::plate_red_jpgSize);
+        case Faceplate::Hammer:   return image (BinaryData::plate_hammer_jpg,   BinaryData::plate_hammer_jpgSize);
         case Faceplate::Black:
         default:                  return image (BinaryData::plate_black_jpg,    BinaryData::plate_black_jpgSize);
     }

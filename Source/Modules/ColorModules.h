@@ -202,4 +202,139 @@ private:
     Biquad pre, de, bump, dip, hf, biasShelf, hissLp;
     DCBlocker dc; Smoother inS, outS; DelayLine delay; Noise noise;
 };
+//==============================================================================
+/** Vintage 76 Pre: two-stage tube broadcast preamp model (V76-style).
+    Input transformer -> stage 1 (inverting triode) -> coupling cap -> stage 2 (inverting triode)
+    -> output transformer, with power-supply sag, tube-age dependent bias / noise and optional mains hum. */
+class Vintage76Pre final : public ModuleBase
+{
+public:
+    static const ModuleInfo& staticInfo()
+    {
+        static const ModuleInfo i = []
+        {
+            ModuleInfo m;
+            m.id = "v76"; m.name = "Vintage 76 Pre"; m.shortName = "V76"; m.category = "Color";
+            m.faceplate = Faceplate::Hammer; m.accent = 0xffff9a3c; m.supportsOversampling = true;
+            m.params = {
+                pLin ("Gain", "GAIN", 0.0, 30.0, 6.0, "dB", 0),
+                pChoice ("Stages", "STAGES", { "1 Stage", "2 Stages" }, 1),
+                pLin ("Iron", "IRON", 0.0, 100.0, 50.0, "%", 0),
+                pChoice ("Tube Age", "TUBE AGE", { "New", "Vintage", "Worn" }, 1),
+                pChoice ("Low Cut", "LOW CUT", { "Off", "40 Hz", "80 Hz", "120 Hz" }, 0),
+                pChoice ("High Cut", "HIGH CUT", { "Off", "15 kHz", "10 kHz" }, 0),
+                pToggle ("Hum", "HUM 50Hz", false),
+                pLin ("Output", "OUTPUT", -24.0, 6.0, 0.0, "dB"),
+            };
+            return m;
+        }();
+        return i;
+    }
+    const ModuleInfo& info() const override { return staticInfo(); }
+
+    void prepare (double newFs, int, int) override
+    {
+        fs = newFs;
+        gainS.prepare (fs, 0.03); outS.prepare (fs);
+        inLow.lowPass (fs, 140.0, 0.6);      // band where the input transformer core saturates
+        outLow.lowPass (fs, 90.0, 0.6);
+        xfmrPeak.lowPass (fs, std::min (fs * 0.45, 24000.0), 1.05);   // slight HF resonance of the iron
+        couple.highPass (fs, 18.0, 0.6);     // inter-stage coupling capacitor
+        miller.lowPass (fs, std::min (fs * 0.45, 32000.0), 0.7);
+        outHp.highPass (fs, 14.0, 0.55);     // output transformer LF limit
+        hissLp.lowPass (fs, 9000.0, 0.5);
+        dc.prepare (fs); dc2.prepare (fs);
+        sagC = timeCoef (0.12, fs); sagA = timeCoef (0.004, fs);
+        lastLc = lastHc = -1;
+        reset();
+    }
+    void reset() override
+    {
+        for (auto* b : { &inLow, &outLow, &xfmrPeak, &couple, &miller, &outHp, &lowCut, &highCut, &hissLp }) b->reset();
+        dc.reset(); dc2.reset(); env = 0; humPh = 0;
+        gainS.snap (dbToGain (gainDb)); outS.snap (dbToGain (outDb));
+    }
+    void setParams (const double* p) override
+    {
+        gainDb = std::round (p[0] * 0.5) * 2.0;      // 2 dB steps like the original's gain switch
+        twoStages = p[1] > 0.5; iron = p[2] / 100.0; age = (int) p[3];
+        hum = p[6] > 0.5; outDb = p[7];
+        if ((int) p[4] != lastLc) { lastLc = (int) p[4]; static const double f[] = { 0, 40, 80, 120 }; if (lastLc > 0) lowCut.highPass (fs, f[lastLc], 0.707); }
+        if ((int) p[5] != lastHc) { lastHc = (int) p[5]; static const double f[] = { 0, 15000, 10000 }; if (lastHc > 0) highCut.lowPass (fs, std::min (f[lastHc], fs * 0.45), 0.707); }
+        gainS.set (dbToGain (gainDb)); outS.set (dbToGain (outDb));
+    }
+
+    void process (double* l, double* r, int n) override
+    {
+        static const double biasT[] = { 0.10, 0.18, 0.26 }, sagK[] = { 0.06, 0.12, 0.2 }, hissDb[] = { -104.0, -92.0, -84.0 }, gcT[] = { 0.85, 0.78, 0.7 };
+        const double bias = biasT[age], gridClip = gcT[age], sk = sagK[age];
+        const double hissG = dbToGain (hissDb[age]) * 2.5, humG = dbToGain (-74.0);
+        const double humInc = 2.0 * kPi * 50.0 / fs;
+        constexpr double h = 0.28;                    // headroom: 0 dBFS sits in the clean part of the curve
+        double* ch[2] = { l, r };
+        for (int i = 0; i < n; ++i)
+        {
+            const double g = gainS.next(), o = outS.next();
+            const double sag = 1.0 / (1.0 + sk * env);  // B+ sag under load
+            double peak = 0;
+            double humS = 0;
+            if (hum) { humPh += humInc; if (humPh > 2 * kPi) humPh -= 2 * kPi; humS = humG * (std::sin (humPh) + 0.45 * std::sin (2 * humPh) + 0.25 * std::sin (3 * humPh)); }
+            for (int c = 0; c < 2; ++c)
+            {
+                double x = ch[c][i];
+                if (lastLc > 0) x = lowCut.process (x, c);
+
+                // input transformer: low band saturates with the core, slight HF peak
+                const double lf = inLow.process (x, c);
+                x += iron * 0.6 * (softClip (lf * h * g * 2.2) / (h * g * 2.2) - lf);
+                x = xfmrPeak.process (x, c);
+
+                // stage(s): split gain between the stages, each an inverting triode
+                const double total = g * sag;
+                double y;
+                if (twoStages)
+                {
+                    const double g1 = std::sqrt (total), g2 = total / g1;
+                    double s1 = -triode (h * g1 * x, bias, gridClip) / h;
+                    s1 = miller.process (couple.process (s1, c), c);
+                    y = -triode (h * g2 * s1, bias * 0.8, gridClip) / (h * total);
+                }
+                else
+                    y = triode (h * total * x, bias, gridClip) / (h * total);
+                y = dc.process (y, c);
+
+                // output transformer: gentler LF saturation and LF roll-off
+                const double lf2 = outLow.process (y, c);
+                y += iron * 0.35 * (softClip (lf2 * 1.8) / 1.8 - lf2);
+                y = dc2.process (outHp.process (y, c), c);
+
+                if (lastHc > 0) y = highCut.process (y, c);
+                y += hissLp.process (noise.next(), c) * hissG + humS;
+                y *= o;
+                ch[c][i] = y;
+                peak = std::max (peak, std::abs (y * total));
+            }
+            env = peak > env ? peak + (env - peak) * sagA : peak + (env - peak) * sagC;
+        }
+    }
+
+private:
+    /** Triode transfer: biased soft curve (even harmonics) with earlier grid-current limiting on the positive side. */
+    static double curve (double v, double gridClip) noexcept
+    {
+        return v > 0.0 ? gridClip * softClip (v / gridClip) : 1.25 * softClip (v / 1.25);
+    }
+    static double triode (double u, double bias, double gridClip) noexcept
+    {
+        const double v0 = curve (bias, gridClip);
+        const double slope = (curve (bias + 1.0e-4, gridClip) - curve (bias - 1.0e-4, gridClip)) / 2.0e-4;   // unity small-signal gain
+        return (curve (u + bias, gridClip) - v0) / slope;
+    }
+
+    double fs = 44100, gainDb = 6, outDb = 0, iron = 0.5, env = 0, sagC = 0, sagA = 0, humPh = 0;
+    int age = 1, lastLc = -1, lastHc = -1; bool twoStages = true, hum = false;
+    Biquad inLow, outLow, xfmrPeak, couple, miller, outHp, lowCut, highCut, hissLp;
+    DCBlocker dc, dc2; Smoother gainS, outS; Noise noise;
+};
+
 } // namespace bl

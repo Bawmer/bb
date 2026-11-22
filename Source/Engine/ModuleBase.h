@@ -95,7 +95,7 @@ inline ParamSpec withOffMin (ParamSpec p, std::string t = "Off") { p.offAtMin = 
 inline ParamSpec withOffMax (ParamSpec p, std::string t = "Off") { p.offAtMax = true; p.offText = std::move (t); return p; }
 
 /** Visual style of a module faceplate (used by the GUI). */
-enum class Faceplate { Black, Silver, Cream, Blue, Graphite, Bronze, Teal, Red };
+enum class Faceplate { Black, Silver, Cream, Blue, Graphite, Bronze, Teal, Red, Hammer };
 
 struct ModuleInfo
 {

@@ -274,6 +274,60 @@ static void testUndoAndModuleSwapLive()
     std::printf ("undo + live swap test done\n");
 }
 
+static void testVintage76()
+{
+    // level-neutral at low drive, more harmonics as the gain rises, hum switch works
+    auto run = [] (double gainDb, float amp, bool hum, double& levelDb, double& thd)
+    {
+        MixRackProcessor p;
+        for (int s = 0; s < kNumSlots; ++s) p.setSlotType (s, -1, true);
+        p.setSlotType (0, ModuleRegistry::indexOf ("v76"), true);
+        setModuleParam (p, 0, "Gain", gainDb);
+        setModuleParam (p, 0, "Hum", hum ? 1.0 : 0.0);
+        setModuleParam (p, 0, "Tube Age", 0);
+        prepare (p, 48000.0, 480);
+        juce::MidiBuffer midi;
+        std::vector<double> out;
+        const double f = 1000.0;
+        long long t = 0;
+        for (int b = 0; b < 200; ++b)
+        {
+            juce::AudioBuffer<float> buf (2, 480);
+            for (int i = 0; i < 480; ++i, ++t)
+            {
+                const float v = amp * (float) std::sin (2.0 * juce::MathConstants<double>::pi * f * (double) t / 48000.0);
+                buf.setSample (0, i, v); buf.setSample (1, i, v);
+            }
+            p.processBlock (buf, midi);
+            if (b >= 100) for (int i = 0; i < 480; ++i) out.push_back (buf.getSample (0, i));
+        }
+        auto bin = [&] (double freq)
+        {
+            double re = 0, im = 0;
+            for (size_t i = 0; i < out.size(); ++i)
+            {
+                const double ph = 2.0 * juce::MathConstants<double>::pi * freq * (double) i / 48000.0;
+                re += out[i] * std::cos (ph); im += out[i] * std::sin (ph);
+            }
+            return 2.0 * std::sqrt (re * re + im * im) / (double) out.size();
+        };
+        const double fund = bin (f);
+        double harm = 0; for (int k = 2; k <= 6; ++k) harm += std::pow (bin (f * k), 2.0);
+        levelDb = juce::Decibels::gainToDecibels (fund / amp);
+        thd = std::sqrt (harm) / fund;
+        if (hum) thd = bin (50.0);   // report hum amplitude instead
+    };
+    double lvl, thdLow, thdHigh, humAmp;
+    run (0.0, 0.03f, false, lvl, thdLow);
+    CHECK (std::abs (lvl) < 1.0, "V76 should be level-neutral at low drive (%.2f dB)", lvl);
+    run (0.0, 0.25f, false, lvl, thdLow);
+    run (30.0, 0.25f, false, lvl, thdHigh);
+    CHECK (thdHigh > thdLow * 3.0 && thdHigh > 0.01, "V76 harmonics should rise with gain (%.4f -> %.4f)", thdLow, thdHigh);
+    run (0.0, 0.0f + 1e-6f, true, lvl, humAmp);
+    CHECK (humAmp > 1e-5 && humAmp < 1e-3, "V76 hum level unexpected: %g", humAmp);
+    std::printf ("V76 test: THD %.3f %% -> %.3f %%, hum %.1f dBFS\n", thdLow * 100, thdHigh * 100, juce::Decibels::gainToDecibels (humAmp));
+}
+
 int main()
 {
     juce::ScopedJuceInitialiser_GUI init;
@@ -283,6 +337,7 @@ int main()
     testFactoryPresets();
     testLayoutsAndDouble();
     testUndoAndModuleSwapLive();
+    testVintage76();
     testAllModulesStable();
     std::printf (failures == 0 ? "ALL TESTS PASSED\n" : "%d FAILURE(S)\n", failures);
     return failures == 0 ? 0 : 1;
