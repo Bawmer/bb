@@ -46,13 +46,15 @@ public:
         peak[0] = peak[1] = 0.0f; rms[0] = rms[1] = 0.0f; lufs = -100.0f;
     }
 
-    void process (const double* l, const double* r, int n) noexcept
+    /** numChannels = 1 meters (and weighs) only the left signal, as BS.1770 does for mono. */
+    void process (const double* l, const double* r, int n, int numChannels = 2) noexcept
     {
+        const int nc = numChannels < 2 ? 1 : 2;
         double pk[2] { 0, 0 };
         for (int i = 0; i < n; ++i)
         {
-            const double x[2] = { l[i], r[i] };
-            for (int c = 0; c < 2; ++c)
+            const double x[2] = { l[i], nc == 1 ? l[i] : r[i] };
+            for (int c = 0; c < nc; ++c)
             {
                 pk[c] = std::max (pk[c], std::abs (x[c]));
                 ms[c] = x[c] * x[c] + (ms[c] - x[c] * x[c]) * rmsC;
@@ -68,6 +70,7 @@ public:
                 lufs.store ((float) (meanSq > 1e-12 ? -0.691 + 10.0 * std::log10 (meanSq) : -100.0));
             }
         }
+        if (nc == 1) { pk[1] = pk[0]; ms[1] = ms[0]; }
         for (int c = 0; c < 2; ++c)
         {
             float cur = peak[c].load();

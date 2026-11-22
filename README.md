@@ -234,6 +234,12 @@ A model of a classic two-stage German broadcast tube preamp (V76-style), built f
 
 It is oversampling-capable (2x/4x recommended at high gain). Measured at −12 dBFS: 0.13 % THD at 0 dB gain, rising to about 17 % at +30 dB.
 
+## Verification
+
+- `rack_test` (runs in CI): bit-exact bypass null, latency alignment, limiter ceiling, state recall, all 13 modules × 44.1/96/192 kHz × 1x/2x/4x, factory presets, mono / stereo layouts, double precision, undo, V76 behaviour, no stale audio after un-bypass, latency-compensated host bypass, module-aware parameter defaults, zipper-free EQ automation, correct mono loudness
+- pluginval strictness 8 (CI), AddressSanitizer + UBSan clean
+- Worst case CPU (8 heavy modules, 4x oversampling everywhere, 96 kHz, 64-sample buffers): about 31 % of one core
+
 ## Architecture
 
 ```
@@ -251,4 +257,5 @@ tests/rack_test.cpp   null test, latency alignment, limiter ceiling, state recal
 
 - **Slot swap:** `RackSlot::build()` (message thread) creates and prepares the module at the right rate → `install()` puts it in `pending` → the audio thread exchanges it at the next block start and moves the old one to `trash` → the processor timer deletes `trash`.
 - **Chain order** is a packed `std::atomic<uint32_t>` (8 × 4 bits), so reordering never blocks audio.
+- **Host bypass** is latency-compensated (the input is delayed by the reported latency), so toggling the plugin's bypass in Cubase does not shift the timing.
 - **Bypass null test:** with every module bypassed, the output equals the input delayed by the reported latency, bit-exact (checked in CI).

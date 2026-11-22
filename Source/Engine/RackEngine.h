@@ -139,7 +139,16 @@ public:
             std::copy (dry[1].begin(), dry[1].begin() + n, r);
             gr.store (0.0f);
             meter (l, r, n, 0.0f);
+            idle = true;
             return;
+        }
+        if (idle)
+        {
+            // the module was not processed while fully bypassed: clear its delay lines / envelopes
+            // so no stale audio fades back in when it is switched on again
+            lm->module->reset();
+            if (lm->osIndex > 0) os[lm->osIndex - 1]->reset();
+            idle = false;
         }
 
         const auto& specs = lm->module->info().params;
@@ -190,6 +199,7 @@ private:
 
     void resetState() noexcept
     {
+        idle = false;
         dryDelay.reset();
         for (auto& o : os) if (o) o->reset();
     }
@@ -203,7 +213,7 @@ private:
     }
 
     SlotParamRefs refs;
-    double fs = 44100; int maxBlock = 512;
+    double fs = 44100; int maxBlock = 512; bool idle = false;
     std::atomic<LoadedModule*> current { nullptr }, pending { nullptr }, trash { nullptr };
     std::atomic<int> installedType { -1 }, installedOs { 0 }, installedLatency { 0 };
     std::atomic<float> outPeak { 0.0f }, gr { 0.0f };

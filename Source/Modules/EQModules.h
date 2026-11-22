@@ -35,15 +35,59 @@ public:
     }
     const ModuleInfo& info() const override { return staticInfo(); }
 
-    void prepare (double newFs, int, int) override { fs = newFs; for (auto& v : last) v = -999; reset(); }
-    void reset() override { for (auto& b : f) b.reset(); }
+    void prepare (double newFs, int, int) override
+    {
+        fs = newFs;
+        glide = 1.0 - std::exp (-(double) kChunk / (0.025 * fs));   // 25 ms parameter glide
+        reset();
+    }
+    void reset() override { for (auto& b : f) b.reset(); primed = false; }
 
     void setParams (const double* p) override
     {
-        bool changed = false;
-        for (int k = 0; k < 12; ++k) if (p[k] != last[k]) { changed = true; last[k] = p[k]; }
-        if (! changed) return;
+        for (int k = 0; k < 12; ++k) target[k] = p[k];
+        if (! primed) { for (int k = 0; k < 12; ++k) cur[k] = target[k]; recompute(); primed = true; }
+    }
+
+    void process (double* l, double* r, int n) override
+    {
+        double* ch[2] = { l, r };
+        for (int start = 0; start < n; start += kChunk)
+        {
+            const int len = std::min (kChunk, n - start);
+            if (step()) recompute();
+            for (int b = 0; b < 6; ++b)
+            {
+                if (! active[b]) continue;
+                for (int c = 0; c < 2; ++c)
+                    for (int i = start; i < start + len; ++i) ch[c][i] = f[b].process (ch[c][i], c);
+            }
+        }
+    }
+
+private:
+    static constexpr int kChunk = 32;
+    static bool isLogParam (int k) { return k == 0 || k == 1 || k == 3 || k == 5 || k == 6 || k == 8 || k == 9 || k == 11; }
+
+    /** Glide the current values toward the targets; returns true if anything moved. */
+    bool step()
+    {
+        bool moved = false;
+        for (int k = 0; k < 12; ++k)
+        {
+            if (cur[k] == target[k]) continue;
+            moved = true;
+            if (isLogParam (k)) cur[k] *= std::pow (target[k] / cur[k], glide);
+            else                cur[k] += (target[k] - cur[k]) * glide;
+            if (std::abs (cur[k] - target[k]) <= 1.0e-4 * (std::abs (target[k]) + 1.0)) cur[k] = target[k];
+        }
+        return moved;
+    }
+
+    void recompute()
+    {
         const auto& ps = info().params;
+        const double* p = cur;
         hpOn = ! ps[0].isOff (p[0]); lpOn = ! ps[1].isOff (p[1]);
         if (hpOn) f[0].highPass (fs, p[0], 0.707);
         if (lpOn) f[1].lowPass (fs, p[1], 0.707);
@@ -58,20 +102,8 @@ public:
         active[4] = std::abs (p[7]) > 1e-6; active[5] = std::abs (p[10]) > 1e-6;
     }
 
-    void process (double* l, double* r, int n) override
-    {
-        double* ch[2] = { l, r };
-        for (int b = 0; b < 6; ++b)
-        {
-            if (! active[b]) continue;
-            for (int c = 0; c < 2; ++c)
-                for (int i = 0; i < n; ++i) ch[c][i] = f[b].process (ch[c][i], c);
-        }
-    }
-
-private:
-    double fs = 44100, last[12] {};
-    bool hpOn = false, lpOn = false, active[6] {};
+    double fs = 44100, glide = 0.03, cur[12] {}, target[12] {};
+    bool primed = false, hpOn = false, lpOn = false, active[6] {};
     Biquad f[6];
 };
 
@@ -104,16 +136,28 @@ public:
     }
     const ModuleInfo& info() const override { return staticInfo(); }
 
-    void prepare (double newFs, int, int) override { fs = newFs; dc.prepare (fs); outS.prepare (fs); drvS.prepare (fs); for (auto& v : last) v = -999; reset(); }
-    void reset() override { for (auto& b : f) b.reset(); dc.reset(); outS.snap (dbToGain (outDb)); drvS.snap (drive); }
+    void prepare (double newFs, int, int) override
+    {
+        fs = newFs; dc.prepare (fs); outS.prepare (fs); drvS.prepare (fs);
+        glide = 1.0 - std::exp (-(double) kChunk / (0.025 * fs));
+        reset();
+    }
+    void reset() override { for (auto& b : f) b.reset(); dc.reset(); outS.snap (dbToGain (outDb)); drvS.snap (drive); primed = false; }
 
     void setParams (const double* p) override
     {
         drive = p[8]; outDb = p[9];
         drvS.set (drive); outS.set (dbToGain (outDb));
-        bool changed = false;
-        for (int k = 0; k < 8; ++k) if (p[k] != last[k]) { changed = true; last[k] = p[k]; }
-        if (! changed) return;
+        for (int k = 0; k < 8; ++k) target[k] = p[k];
+        for (int k : { 0, 3, 6 }) cur[k] = p[k];           // frequency selectors switch instantly
+        if (! primed) { for (int k = 0; k < 8; ++k) cur[k] = target[k]; recompute(); primed = true; }
+        else if (cur[0] != lastSel[0] || cur[3] != lastSel[1] || cur[6] != lastSel[2]) recompute();
+    }
+
+    void recompute()
+    {
+        const double* p = cur;
+        lastSel[0] = p[0]; lastSel[1] = p[3]; lastSel[2] = p[6];
         static const double lowF[] = { 20, 30, 60, 100 }, hiF[] = { 3000, 4000, 5000, 8000, 10000, 12000, 16000 }, atF[] = { 5000, 10000, 20000 };
         const double lf = lowF[(int) p[0]];
         f[0].lowShelf (fs, lf, 0.55, p[1] * 1.35);          // boost
@@ -123,12 +167,26 @@ public:
         f[3].highShelf (fs, std::min (atF[(int) p[6]], fs * 0.45), 0.7, -p[7] * 1.6);
     }
 
+    bool step()
+    {
+        bool moved = false;
+        for (int k : { 1, 2, 4, 5, 7 })
+        {
+            if (cur[k] == target[k]) continue;
+            moved = true;
+            cur[k] += (target[k] - cur[k]) * glide;
+            if (std::abs (cur[k] - target[k]) < 1.0e-4) cur[k] = target[k];
+        }
+        return moved;
+    }
+
     void process (double* l, double* r, int n) override
     {
         constexpr double h = 0.22;
         double* ch[2] = { l, r };
         for (int i = 0; i < n; ++i)
         {
+            if (i % kChunk == 0 && step()) recompute();
             const double d = drvS.next(), o = outS.next();
             const double g = 1.0 + d * 0.5, b = 0.02 + d * 0.012, sb = softClip (b), hg = h * g;
             const double norm = 1.0 / (hg * (1.0 - b * b * 0.33));
@@ -143,7 +201,9 @@ public:
     }
 
 private:
-    double fs = 44100, drive = 2, outDb = 0, last[8] {};
+    static constexpr int kChunk = 32;
+    double fs = 44100, drive = 2, outDb = 0, glide = 0.03, cur[8] {}, target[8] {}, lastSel[3] { -1, -1, -1 };
+    bool primed = false;
     Biquad f[4]; DCBlocker dc; Smoother outS, drvS;
 };
 } // namespace bl

@@ -42,6 +42,13 @@ public:
         return "-";
     }
 
+    /** Host "reset to default" uses the loaded module's default, not the generic 50 %. */
+    float getDefaultValue() const override
+    {
+        if (auto* s = spec()) return (float) s->defaultNorm();
+        return 0.5f;
+    }
+
     float getValueForText (const juce::String& text) const override
     {
         auto* s = spec();
@@ -175,6 +182,8 @@ void MixRackProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
         engine.slot (s).adoptPendingNow();
     }
     inMeter.prepare (sr); outMeter.prepare (sr);
+    for (auto& b : bypassBuf) b.assign ((size_t) (bl::kNumSlots * bl::RackSlot::kMaxLatency + 1), 0.0);
+    bypassPos = 0;
     inGainS.reset (sr, 0.03); outGainS.reset (sr, 0.03);
     inGainS.setCurrentAndTargetValue (juce::Decibels::decibelsToGain ((double) inGainRef->load()));
     outGainS.setCurrentAndTargetValue (juce::Decibels::decibelsToGain ((double) outGainRef->load()));
@@ -183,6 +192,33 @@ void MixRackProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 }
 
 void MixRackProcessor::processBlock (juce::AudioBuffer<float>& b, juce::MidiBuffer&)  { processT (b); }
+void MixRackProcessor::processBlockBypassed (juce::AudioBuffer<float>& b, juce::MidiBuffer&)  { bypassT (b); }
+void MixRackProcessor::processBlockBypassed (juce::AudioBuffer<double>& b, juce::MidiBuffer&) { bypassT (b); }
+
+/** Host bypass: pass the input through delayed by the reported latency, so the timing does not jump. */
+template <typename T>
+void MixRackProcessor::bypassT (juce::AudioBuffer<T>& buffer)
+{
+    juce::ScopedNoDenormals noDenormals;
+    const int inCh = getTotalNumInputChannels(), outCh = getTotalNumOutputChannels();
+    const int n = buffer.getNumSamples(), numCh = buffer.getNumChannels();
+    const int size = (int) bypassBuf[0].size();
+    if (size == 0) return;
+    const int lat = juce::jlimit (0, size - 1, getLatencySamples());
+    for (int i = 0; i < n; ++i)
+    {
+        const double inL = inCh > 0 && numCh > 0 ? (double) buffer.getSample (0, i) : 0.0;
+        const double inR = inCh > 1 && numCh > 1 ? (double) buffer.getSample (1, i) : inL;
+        bypassBuf[0][(size_t) bypassPos] = inL;
+        bypassBuf[1][(size_t) bypassPos] = inR;
+        const int rd = (bypassPos - lat + size) % size;
+        const double l = bypassBuf[0][(size_t) rd], r = bypassBuf[1][(size_t) rd];
+        bypassPos = (bypassPos + 1) % size;
+        if (outCh == 1 && numCh > 0) buffer.setSample (0, i, (T) ((l + r) * 0.5));
+        else if (numCh > 1) { buffer.setSample (0, i, (T) l); buffer.setSample (1, i, (T) r); }
+    }
+    for (int c = juce::jmax (outCh, 2); c < numCh; ++c) buffer.clear (c, 0, n);
+}
 void MixRackProcessor::processBlock (juce::AudioBuffer<double>& b, juce::MidiBuffer&) { processT (b); }
 
 template <typename T>
@@ -214,18 +250,20 @@ void MixRackProcessor::processT (juce::AudioBuffer<T>& buffer)
         }
         if (inGainS.isSmoothing() || inGainS.getTargetValue() != 1.0)
             for (int i = 0; i < n; ++i) { const double g = inGainS.getNextValue(); l[i] *= g; r[i] *= g; }
-        inMeter.process (l, r, n);
+        inMeter.process (l, r, n, inCh);
 
         engine.process (l, r, n, soloActive);
 
         if (outGainS.isSmoothing() || outGainS.getTargetValue() != 1.0)
             for (int i = 0; i < n; ++i) { const double g = outGainS.getNextValue(); l[i] *= g; r[i] *= g; }
-        outMeter.process (l, r, n);
+        if (outCh == 1)
+            for (int i = 0; i < n; ++i) l[i] = r[i] = (l[i] + r[i]) * 0.5;   // meter what is actually output
+        outMeter.process (l, r, n, outCh);
 
         if (outCh == 1 && numCh > 0)
         {
             T* o = buffer.getWritePointer (0, off);
-            for (int i = 0; i < n; ++i) o[i] = (T) ((l[i] + r[i]) * 0.5);
+            for (int i = 0; i < n; ++i) o[i] = (T) l[i];
         }
         else if (numCh > 1)
         {
@@ -262,6 +300,7 @@ void MixRackProcessor::rebuildSlot (int slot, int type)
 
 void MixRackProcessor::syncFromMessageThread()
 {
+    std::lock_guard<std::recursive_mutex> lock (installMutex);   // prepareToPlay may run on another thread
     for (int s = 0; s < kNumSlots; ++s)
     {
         auto& sl = engine.slot (s);
@@ -431,7 +470,7 @@ void MixRackProcessor::applyRackPreset (const RackPresetDef& def)
         auto* p = apvts.getParameter (pid);
         p->setValueNotifyingHost (p->convertTo0to1 ((float) v));
     }
-    currentPresetName = juce::String (def.bank) + " / " + def.name;
+    setPresetName (juce::String (def.bank) + " / " + def.name);
 }
 
 void MixRackProcessor::loadInitRack()
@@ -440,7 +479,7 @@ void MixRackProcessor::loadInitRack()
         { "eq4", {} }, { "vca", {} }, { nullptr, {} }, { nullptr, {} },
         { nullptr, {} }, { nullptr, {} }, { nullptr, {} }, { "limiter", {} } } };
     applyRackPreset (init);
-    currentPresetName = "Init";
+    setPresetName ("Init");
 }
 
 bool MixRackProcessor::saveUserPreset (const juce::File& f)
@@ -450,7 +489,7 @@ bool MixRackProcessor::saveUserPreset (const juce::File& f)
     if (auto xml = state.createXml())
     {
         f.getParentDirectory().createDirectory();
-        if (xml->writeTo (f)) { currentPresetName = "User / " + f.getFileNameWithoutExtension(); return true; }
+        if (xml->writeTo (f)) { setPresetName ("User / " + f.getFileNameWithoutExtension()); return true; }
     }
     return false;
 }
@@ -462,7 +501,7 @@ bool MixRackProcessor::loadUserPreset (const juce::File& f)
     const auto scale = apvts.state.getProperty (kUiScaleId);
     apvts.replaceState (juce::ValueTree::fromXml (*xml));
     if (! scale.isVoid()) apvts.state.setProperty (kUiScaleId, scale, nullptr);
-    currentPresetName = "User / " + f.getFileNameWithoutExtension();
+    setPresetName ("User / " + f.getFileNameWithoutExtension());
     return true;
 }
 
@@ -482,7 +521,7 @@ void MixRackProcessor::copyCurrentToOther() { abState[1 - activeAB] = apvts.copy
 void MixRackProcessor::getStateInformation (juce::MemoryBlock& dest)
 {
     auto state = apvts.copyState();
-    state.setProperty ("presetName", currentPresetName, nullptr);
+    state.setProperty ("presetName", getPresetName(), nullptr);
     if (auto xml = state.createXml()) copyXmlToBinary (*xml, dest);
 }
 
@@ -492,7 +531,7 @@ void MixRackProcessor::setStateInformation (const void* data, int size)
         if (xml->hasTagName (apvts.state.getType()))
         {
             auto t = juce::ValueTree::fromXml (*xml);
-            currentPresetName = t.getProperty ("presetName", "Init").toString();
+            setPresetName (t.getProperty ("presetName", "Init").toString());
             apvts.replaceState (t);
         }
 }

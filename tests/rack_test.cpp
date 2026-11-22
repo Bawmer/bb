@@ -328,6 +328,99 @@ static void testVintage76()
     std::printf ("V76 test: THD %.3f %% -> %.3f %%, hum %.1f dBFS\n", thdLow * 100, thdHigh * 100, juce::Decibels::gainToDecibels (humAmp));
 }
 
+static void testAuditFixes()
+{
+    juce::MidiBuffer midi;
+    // 1. no stale audio when a module is switched back on after a full bypass
+    {
+        MixRackProcessor p;
+        for (int s = 0; s < kNumSlots; ++s) p.setSlotType (s, -1, true);
+        p.setSlotType (0, ModuleRegistry::indexOf ("limiter"), true);
+        prepare (p, 48000.0, 256);
+        std::mt19937 rng (21);
+        juce::AudioBuffer<float> buf (2, 256);
+        for (int b = 0; b < 20; ++b) { fillNoise (buf, rng, 0.8f); p.processBlock (buf, midi); }
+        setReal (p, 0, "bypass", 1.0f);
+        for (int b = 0; b < 10; ++b) { fillNoise (buf, rng, 0.8f); p.processBlock (buf, midi); }   // fully bypassed
+        for (int b = 0; b < 4; ++b) { buf.clear(); p.processBlock (buf, midi); }                   // flush the (correct) dry delay
+        setReal (p, 0, "bypass", 0.0f);
+        float worst = 0;
+        for (int b = 0; b < 10; ++b) { buf.clear(); p.processBlock (buf, midi); worst = juce::jmax (worst, buf.getMagnitude (0, 256)); }
+        CHECK (worst < 1.0e-6f, "stale audio after un-bypass: %g", worst);
+    }
+    // 2. host bypass is delayed by the reported latency
+    {
+        MixRackProcessor p;
+        for (int s = 0; s < kNumSlots; ++s) p.setSlotType (s, -1, true);
+        p.setSlotType (0, ModuleRegistry::indexOf ("limiter"), true);
+        prepare (p, 48000.0, 512);
+        const int lat = p.getLatencySamples();
+        juce::AudioBuffer<float> buf (2, 512); buf.clear();
+        buf.setSample (0, 5, 0.5f); buf.setSample (1, 5, 0.5f);
+        p.processBlockBypassed (buf, midi);
+        int at = -1; for (int i = 0; i < 512; ++i) if (std::abs (buf.getSample (0, i) - 0.5f) < 1e-6f) at = i;
+        CHECK (lat > 0 && at == 5 + lat, "host bypass should delay by %d samples, impulse at %d", lat, at);
+    }
+    // 3. host "reset to default" uses the module default
+    {
+        MixRackProcessor p;
+        p.setSlotType (0, ModuleRegistry::indexOf ("vca"), true);
+        const auto& spec = ModuleRegistry::info (p.getSlotType (0))->params[0];
+        CHECK (std::abs (p.slotParam (0, "p1")->getDefaultValue() - (float) spec.defaultNorm()) < 1e-6f,
+               "slot default %f vs module default %f", p.slotParam (0, "p1")->getDefaultValue(), spec.defaultNorm());
+    }
+    // 4. EQ automation glides instead of stepping (no zipper)
+    {
+        MixRackProcessor p;
+        for (int s = 0; s < kNumSlots; ++s) p.setSlotType (s, -1, true);
+        p.setSlotType (0, ModuleRegistry::indexOf ("eq4"), true);
+        prepare (p, 48000.0, 480);
+        juce::AudioBuffer<float> buf (2, 480);
+        long long t = 0;
+        auto run = [&] (std::vector<float>& out)
+        {
+            for (int i = 0; i < 480; ++i, ++t)
+            {
+                const float v = 0.25f * (float) std::sin (2.0 * juce::MathConstants<double>::pi * 2000.0 * (double) t / 48000.0);
+                buf.setSample (0, i, v); buf.setSample (1, i, v);
+            }
+            p.processBlock (buf, midi);
+            for (int i = 0; i < 480; ++i) out.push_back (buf.getSample (0, i));
+        };
+        std::vector<float> out;
+        for (int b = 0; b < 10; ++b) run (out);
+        const size_t jump = out.size();
+        setModuleParam (p, 0, "High-Mid Gain", 15.0);
+        setModuleParam (p, 0, "High-Mid Freq", 2000.0);
+        for (int b = 0; b < 10; ++b) run (out);
+        float before = 0, early = 0, late = 0;
+        for (size_t i = jump - 96; i < jump; ++i) before = juce::jmax (before, std::abs (out[i]));
+        for (size_t i = jump; i < jump + 48; ++i) early = juce::jmax (early, std::abs (out[i]));
+        for (size_t i = out.size() - 480; i < out.size(); ++i) late = juce::jmax (late, std::abs (out[i]));
+        CHECK (early < before * 1.6f, "EQ gain jumped instantly (%.3f -> %.3f)", before, early);
+        CHECK (late > before * 4.0f, "EQ did not reach the new gain (%.3f -> %.3f)", before, late);
+    }
+    // 5. mono loudness is not doubled: 0 dBFS 1 kHz sine, mono -> -3.01 LUFS
+    {
+        MixRackProcessor p;
+        for (int s = 0; s < kNumSlots; ++s) p.setSlotType (s, -1, true);
+        juce::AudioProcessor::BusesLayout layout;
+        layout.inputBuses.add (juce::AudioChannelSet::mono()); layout.outputBuses.add (juce::AudioChannelSet::mono());
+        p.setBusesLayout (layout);
+        prepare (p, 48000.0, 480);
+        juce::AudioBuffer<float> buf (1, 480);
+        long long t = 0;
+        for (int b = 0; b < 400; ++b)
+        {
+            for (int i = 0; i < 480; ++i, ++t) buf.setSample (0, i, (float) std::sin (2.0 * juce::MathConstants<double>::pi * 1000.0 * (double) t / 48000.0));
+            p.processBlock (buf, midi);
+        }
+        const float lufs = p.outMeter.getLufsS();
+        CHECK (std::abs (lufs + 3.01f) < 0.25f, "mono 0 dBFS sine should read -3.0 LUFS, got %.2f", lufs);
+        std::printf ("audit fixes test: mono sine %.2f LUFS\n", lufs);
+    }
+}
+
 int main()
 {
     juce::ScopedJuceInitialiser_GUI init;
@@ -338,6 +431,7 @@ int main()
     testLayoutsAndDouble();
     testUndoAndModuleSwapLive();
     testVintage76();
+    testAuditFixes();
     testAllModulesStable();
     std::printf (failures == 0 ? "ALL TESTS PASSED\n" : "%d FAILURE(S)\n", failures);
     return failures == 0 ? 0 : 1;

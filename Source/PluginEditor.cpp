@@ -283,7 +283,22 @@ void RackContent::timerCallback()
     if (newLat != latencyText) { latencyText = newLat; repaint (1590, 46, 280, 36); }
     if (newCpu != cpuText) { cpuText = newCpu; repaint (kOsLcd); }
     if (newLufs != lufsText) { lufsText = newLufs; repaint (kLufsLcd); }
-    if (presetDisplay.name != proc.currentPresetName) { presetDisplay.name = proc.currentPresetName; presetDisplay.repaint(); }
+    if (presetDisplay.name != proc.getPresetName())
+    {
+        presetDisplay.name = proc.getPresetName();
+        presetDisplay.repaint();
+        // keep the browser position in sync (e.g. after a project reload), so the arrows step from here
+        const auto& fp = factoryPresets();
+        if (presetDisplay.name == "Init") currentPresetId = kInitId;
+        for (int i = 0; i < (int) fp.size(); ++i)
+            if (presetDisplay.name == juce::String (fp[(size_t) i].bank) + " / " + fp[(size_t) i].name) currentPresetId = kFactoryBase + i;
+        if (presetDisplay.name.startsWith ("User / "))
+        {
+            buildPresetMenu();
+            for (int i = 0; i < (int) userPresets.size(); ++i)
+                if (presetDisplay.name == "User / " + userPresets[(size_t) i].getFileNameWithoutExtension()) currentPresetId = kUserBase + i;
+        }
+    }
     refreshAB();
 }
 

@@ -21,6 +21,8 @@ public:
     bool supportsDoublePrecisionProcessing() const override { return true; }
     void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
     void processBlock (juce::AudioBuffer<double>&, juce::MidiBuffer&) override;
+    void processBlockBypassed (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
+    void processBlockBypassed (juce::AudioBuffer<double>&, juce::MidiBuffer&) override;
 
     juce::AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override { return true; }
@@ -61,7 +63,8 @@ public:
     void loadInitRack();
     bool saveUserPreset (const juce::File&);
     bool loadUserPreset (const juce::File&);
-    juce::String currentPresetName { "Init" };
+    juce::String getPresetName() const              { const juce::SpinLock::ScopedLockType l (nameLock); return presetName; }
+    void setPresetName (const juce::String& n)      { const juce::SpinLock::ScopedLockType l (nameLock); presetName = n; }
 
     /** A/B compare */
     void selectAB (int which);
@@ -98,6 +101,9 @@ private:
     void rebuildSlot (int slot, int type);
 
     template <typename T> void processT (juce::AudioBuffer<T>&);
+    template <typename T> void bypassT (juce::AudioBuffer<T>&);
+    std::vector<double> bypassBuf[2];
+    int bypassPos = 0;
 
     std::atomic<float>* soloRefs[bl::kNumSlots] {};
     std::atomic<float>* osRefs[bl::kNumSlots] {};
@@ -111,6 +117,8 @@ private:
     std::recursive_mutex installMutex;
 
     juce::ValueTree abState[2], clipboard;
+    juce::String presetName { "Init" };
+    mutable juce::SpinLock nameLock;     // the host may restore state off the message thread
     int activeAB = 0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MixRackProcessor)
