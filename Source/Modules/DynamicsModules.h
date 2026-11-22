@@ -26,7 +26,7 @@ public:
         {
             ModuleInfo m;
             m.id = "fet"; m.name = "FET Compressor"; m.shortName = "FET"; m.category = "Dynamics";
-            m.faceplate = Faceplate::Black; m.accent = 0xffe8e8e8; m.supportsOversampling = true; m.hasGainReduction = true;
+            m.faceplate = Faceplate::Silver; m.accent = 0xffffb347; m.supportsOversampling = true; m.hasGainReduction = true;
             m.params = {
                 pLin ("Input", "INPUT", 0.0, 48.0, 0.0, "dB"),
                 pLin ("Output", "OUTPUT", -24.0, 24.0, 0.0, "dB"),

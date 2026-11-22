@@ -8,12 +8,12 @@ class MixRackProcessor;
 
 namespace bl
 {
-/** One vertical rack unit showing the module loaded in a slot. */
+/** One rack module (219 x 603, the artwork's unit size) showing the module loaded in a slot. */
 class ModuleUnit final : public juce::Component,
                          public juce::DragAndDropTarget
 {
 public:
-    static constexpr int kWidth = 148, kHeight = 548;
+    static constexpr int kWidth = 219, kHeight = 603;
 
     ModuleUnit (MixRackProcessor&, int slotIndex);
     ~ModuleUnit() override;
@@ -21,7 +21,6 @@ public:
     int getSlot() const noexcept { return slot; }
     std::function<int()> getPosition;   // chain position (set by the editor)
 
-    /** Rebuild controls if the slot's module changed. */
     void refresh();
     void updateMeters();
 
@@ -30,6 +29,7 @@ public:
     void resized() override;
     void mouseDown (const juce::MouseEvent&) override;
     void mouseDrag (const juce::MouseEvent&) override;
+    void mouseUp (const juce::MouseEvent&) override;
     void mouseMove (const juce::MouseEvent&) override;
 
     bool isInterestedInDragSource (const SourceDetails&) override;
@@ -44,32 +44,37 @@ private:
     {
         juce::String label;
         juce::Rectangle<int> area;
+        juce::RangedAudioParameter* param = nullptr;
+        bool hasLed = false;
         std::unique_ptr<juce::Slider> knob;
         std::unique_ptr<juce::ComboBox> combo;
-        std::unique_ptr<juce::TextButton> toggle;
+        std::unique_ptr<ToggleSwitch> toggle;
         std::unique_ptr<juce::SliderParameterAttachment> knobAtt;
         std::unique_ptr<juce::ParameterAttachment> paramAtt;
     };
 
     void rebuild();
-    void showMenu();
-    std::unique_ptr<Cell> makeKnobCell (juce::RangedAudioParameter&, const juce::String& label, double defNorm, bool bipolar, int size);
-    void styleKnob (juce::Slider&, bool bipolar);
-    juce::Rectangle<int> gripArea() const { return { 50, 34, 46, 18 }; }
+    void showModuleMenu();
+    void runMenuAction (int id);
+    std::unique_ptr<Cell> makeKnobCell (juce::RangedAudioParameter&, const juce::String& label, double defNorm, bool trim);
+    void styleKnob (juce::Slider&);
+    juce::Rectangle<int> titleArea() const { return { 46, 10, kWidth - 70, 38 }; }
+    bool isEmpty() const { return shownType < 0; }
 
     MixRackProcessor& proc;
     const int slot;
     int shownType = -999;
-    bool dragOver = false;
+    bool dragOver = false, dragStarted = false;
+    int repaintTick = 0;
+    int gridCols = 2, labelSize = 13;
 
-    juce::ComboBox moduleBox, osBox;
-    juce::TextButton menuButton { juce::String::fromUTF8 ("\xe2\x89\xa1") }, soloButton { "S" };
-    LedButton power { juce::Colour (0xffff5a3a), true };
+    LedButton power { juce::Colour (0xffff4a2a), true }, solo { juce::Colour (0xffffb020), false };
+    juce::ComboBox osBox;
     std::unique_ptr<juce::ButtonParameterAttachment> powerAtt, soloAtt;
     std::unique_ptr<juce::ComboBoxParameterAttachment> osAtt;
 
     std::vector<std::unique_ptr<Cell>> cells, trims;
-    LevelBar outBar { false }, grBar { false, true };
+    VuMeter vu { true };
     std::unique_ptr<juce::FileChooser> chooser;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ModuleUnit)

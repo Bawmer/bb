@@ -29,20 +29,25 @@ Output: `build/BubLeonMixRack_artefacts/Release/VST3/Bub Leon Mix Rack.vst3`
 
 ## Using the rack
 
+The GUI is a brushed-metal 19" rack (design reference: `docs/design_reference.png`).
+
 | Element | What it does |
 |---|---|
-| Module selector (top of each unit) | Load / swap / clear a module. Swapping resets the slot to the module's defaults |
-| Grip (the ridges next to **S**) | Drag a unit onto another unit to move it to that chain position. Automation follows the module |
-| Power LED | Module on / bypass, with a click-free 12 ms crossfade |
-| **S** | Solo: hear this module only (all other modules are bypassed) |
-| 1x / 2x / 4x | Per-module oversampling (Console Preamp, Passive Tube EQ, FET Compressor, Tape Saturator) |
+| **Module title** (top of each unit) | Click: load / swap / clear a module, save / load module presets (`.blmod`), copy / paste, reset. Drag the title onto another unit to move it to that chain position (automation follows the module). Right-click works too |
+| Title LED | Module on / bypass, with a click-free 12 ms crossfade |
+| Value LEDs above the knobs | Glow brighter as the knob turns up |
+| Toggle switches / amber selectors | On/off controls (up = on) and multi-position controls |
 | IN / MIX / OUT | Per-slot input trim, parallel dry/wet blend (latency aligned), output trim |
-| ≡ menu / right-click | Save / load module preset (`.blmod`), copy / paste, reset, clear |
-| Top bar | Rack presets (factory banks + user), save, A/B compare and copy, undo / redo, global input / output, global oversampling override, latency and CPU readout |
-| Bottom bar | Input/output peak + RMS meters, LUFS short-term (3 s, BS.1770), gain reduction for every slot in chain order |
+| VU meter | Slot output level (0 VU = −18 dBFS) |
+| **SOLO** lamp / **OS** selector | Solo this module (all others are bypassed) / per-module oversampling 1x · 2x · 4x (Console Preamp, Passive Tube EQ, FET Compressor, Tape Saturator) |
+| Preset LCD | Click: rack preset browser. ▲▼ arrows or mouse wheel: previous / next. Right-click: previous / next, save, init, **undo / redo**, open preset folder |
+| SAVE · A · B · A=B | Save rack preset · compare settings A and B · copy the current setting to the other memory |
+| INPUT / OUTPUT knobs | Global input / output gain |
+| OS / CPU screen | Click to choose global oversampling (Per Slot / Off / 2x All / 4x All); shows CPU load |
+| Bottom panel | Input / output VU meters, LUFS short-term readout (3 s, BS.1770), gain-reduction LEDs for every slot in chain order (1 / 3 / 6 / 10 / 15 dB) |
 
-Knobs: drag to adjust, **Ctrl-drag** for fine control, **double-click** to reset, mouse wheel to step. The value shows while you drag and in the tooltip.
-The window can be resized from 100 % to 200 % (drag the corner), and the size is saved with the project.
+Knobs: drag to adjust, **Ctrl-drag** for fine control, **double-click** to reset, mouse wheel to step. The value shows while you drag and in the tooltip. Undo / redo also on **Ctrl+Z / Ctrl+Y** while the plugin window has focus.
+The window can be resized from 1250 to 2500 px wide (drag the corner), and the size is saved with the project.
 
 ### Presets
 
@@ -52,13 +57,13 @@ The window can be resized from 100 % to 200 % (drag the corner), and the size is
 
 ## Custom faceplate images
 
-Every unit is drawn as vectors by default. To use your own artwork, put a PNG named after the module id in
+Every unit's brushed faceplate is built in. To use your own artwork for a module, put a PNG named after the module id in
 
 ```
 Documents\BL Audio\Mix Rack\Faceplates\<module-id>.png
 ```
 
-e.g. `vca.png`, `tubeeq.png`. Use **296 × 1096 px** (2× of the 148 × 548 unit) for sharp results at 200 %. Images are loaded once when the plugin opens and stretched to the unit. Controls are drawn on top at fixed positions: two columns × six rows of knobs starting 58 px from the top, the IN/MIX/OUT row at 422 px, and meters at 484 px (unit coordinates). Module ids: `preamp eq4 tubeeq fet opto vca deess gate tape imager transient limiter`.
+e.g. `vca.png`, `tubeeq.png`. Use **438 × 1206 px** (2× the 219 × 603 unit) for sharp results at full size. Knobs, labels and the VU meter are drawn on top: title at the top 50 px, controls from y 56 to 444, the IN/MIX/OUT row at 452 px and the VU meter at 540 px (unit coordinates). Module ids: `preamp eq4 tubeeq fet opto vca deess gate tape imager transient limiter`.
 
 ## Parameter map (host automation)
 
@@ -210,7 +215,8 @@ Source/
   DSP/        Common.h (biquads, smoothing, soft clip, delay line), Meters.h (peak/RMS/LUFS-S)
   Engine/     ModuleBase.h (module + ParamSpec interface), ModuleRegistry.h, RackEngine.h (slots, swaps, OS, latency)
   Modules/    Color, EQ, Dynamics, Utility, Limiter modules
-  GUI/        RackLookAndFeel.h, Widgets.h (LED, meters), ModuleUnit (one rack unit)
+  GUI/        Skin.h (rack skin, LCD / 7-segment / VU drawing), RackLookAndFeel.h, Widgets.h, ModuleUnit
+Resources/skin/  background and brushed faceplates (embedded via juce_add_binary_data)
   Presets/    FactoryPresets (30 rack presets)
   PluginProcessor / PluginEditor
 tests/rack_test.cpp   null test, latency alignment, limiter ceiling, state recall,

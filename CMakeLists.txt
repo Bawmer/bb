@@ -39,6 +39,12 @@ juce_add_plugin(BubLeonMixRack
     VST3_CATEGORIES           Fx Dynamics EQ
     COPY_PLUGIN_AFTER_BUILD   FALSE)
 
+file(GLOB MR_SKIN CONFIGURE_DEPENDS Resources/skin/*.jpg)
+juce_add_binary_data(MixRackSkin SOURCES ${MR_SKIN})
+if(NOT MSVC)
+    set_target_properties(MixRackSkin PROPERTIES POSITION_INDEPENDENT_CODE TRUE)
+endif()
+
 set(MR_SOURCES
     Source/PluginProcessor.cpp
     Source/PluginEditor.cpp
@@ -56,6 +62,7 @@ target_compile_definitions(BubLeonMixRack PUBLIC
 
 target_link_libraries(BubLeonMixRack
     PRIVATE
+        MixRackSkin
         juce::juce_audio_utils
         juce::juce_dsp
     PUBLIC
@@ -73,6 +80,6 @@ if(MR_BUILD_TESTS)
     target_include_directories(rack_test PRIVATE Source)
     target_compile_definitions(rack_test PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0
                                JucePlugin_Name="Bub Leon Mix Rack" JUCE_MODAL_LOOPS_PERMITTED=1)
-    target_link_libraries(rack_test PRIVATE juce::juce_audio_utils juce::juce_dsp juce::juce_recommended_config_flags)
+    target_link_libraries(rack_test PRIVATE MixRackSkin juce::juce_audio_utils juce::juce_dsp juce::juce_recommended_config_flags)
     add_test(NAME rack_test COMMAND rack_test)
 endif()

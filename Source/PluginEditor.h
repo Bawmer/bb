@@ -2,16 +2,27 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "PluginProcessor.h"
 #include "GUI/ModuleUnit.h"
+#include "GUI/Skin.h"
 
-/** Unscaled editor content; the editor scales it 100-200 %. */
+/** Amber LCD showing the preset; click = preset menu, wheel / arrows = previous / next, right-click = more. */
+class PresetDisplay final : public juce::Component, public juce::SettableTooltipClient
+{
+public:
+    std::function<void()> onClick, onMenu;
+    std::function<void (int)> onStep;
+    juce::String name { "Init" };
+    void paint (juce::Graphics&) override;
+    void mouseUp (const juce::MouseEvent&) override;
+    void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
+};
+
+/** Editor content at the artwork's native size (2032 x 1120); the editor scales it. */
 class RackContent final : public juce::Component,
                           public juce::DragAndDropContainer,
                           private juce::Timer
 {
 public:
-    static constexpr int kTopH = 54, kBottomH = 86, kGap = 6, kMargin = 12;
-    static constexpr int kWidth  = kMargin * 2 + bl::kNumSlots * bl::ModuleUnit::kWidth + (bl::kNumSlots - 1) * kGap;
-    static constexpr int kHeight = kTopH + bl::ModuleUnit::kHeight + kBottomH + 10;
+    static constexpr int kWidth = bl::skin::kW, kHeight = bl::skin::kH;
 
     explicit RackContent (MixRackProcessor&);
     ~RackContent() override;
@@ -19,27 +30,35 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
     void mouseDown (const juce::MouseEvent&) override;
+    void mouseUp (const juce::MouseEvent&) override;
+    bool keyPressed (const juce::KeyPress&) override;
 
 private:
     void timerCallback() override;
-    void buildPresetMenu();
+    juce::PopupMenu buildPresetMenu();
+    void loadPresetId (int id);
+    void stepPreset (int dir);
+    void savePreset();
+    void showPresetExtras();
+    void showOsMenu();
+    void refreshAll();
     void refreshAB();
+    juce::Rectangle<int> unitRect (int pos) const;
 
     MixRackProcessor& proc;
+    juce::Image bg;
     std::array<std::unique_ptr<bl::ModuleUnit>, bl::kNumSlots> units;
     std::array<int, bl::kNumSlots> shownOrder {};
 
-    juce::ComboBox presetBox, osModeBox;
-    juce::TextButton prevButton { "<" }, nextButton { ">" }, saveButton { "SAVE" },
-                     aButton { "A" }, bButton { "B" }, copyAB { "A>B" },
-                     undoButton { "UNDO" }, redoButton { "REDO" };
+    PresetDisplay presetDisplay;
+    juce::TextButton saveButton { "SAVE" }, aButton { "A" }, bButton { "B" }, copyAB { "A=B" };
     juce::Slider inGain, outGain;
     std::unique_ptr<juce::SliderParameterAttachment> inAtt, outAtt;
-    std::unique_ptr<juce::ComboBoxParameterAttachment> osAtt;
-    bl::LevelBar inL { false }, inR { false }, outL { false }, outR { false };
-    std::array<std::unique_ptr<bl::LevelBar>, bl::kNumSlots> grStrip;
-    juce::String latencyText { "LATENCY -" }, cpuText { "CPU -" }, lufsText { "-inf" };
+    bl::VuMeter inVu { false }, outVu { false };
+    std::array<std::unique_ptr<bl::GrLeds>, bl::kNumSlots> grLeds;
+    juce::String latencyText { "LATENCY -" }, cpuText { "-" }, lufsText { "-" };
     std::vector<juce::File> userPresets;
+    int currentPresetId = 1;
     std::unique_ptr<juce::FileChooser> chooser;
     juce::TooltipWindow tooltips { this, 600 };
 };

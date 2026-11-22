@@ -6,10 +6,22 @@ namespace bl
 {
 namespace
 {
-constexpr int kTop = 58, kCellW = 66, kCellH = 60, kCols = 2, kRows = 6;
+constexpr int kGridTop = 56, kGridBottom = 444, kTrimY = 452, kVuY = 540;
 const char* kModuleExt = "*.blmod";
+enum MenuIds { kSave = 901, kLoad, kCopy, kPaste, kReset, kClear };
 
 juce::File moduleFolder() { return MixRackProcessor::userPresetFolder().getChildFile ("Modules"); }
+
+void drawEngraved (juce::Graphics& g, const juce::String& t, juce::Rectangle<float> r, juce::Font f, juce::Colour col)
+{
+    g.setFont (f);
+    g.setColour (juce::Colours::black.withAlpha (0.55f));
+    g.drawText (t, r.translated (0, -1.0f), juce::Justification::centred);
+    g.setColour (juce::Colours::white.withAlpha (0.12f));
+    g.drawText (t, r.translated (0, 1.2f), juce::Justification::centred);
+    g.setColour (col);
+    g.drawText (t, r, juce::Justification::centred);
+}
 }
 
 juce::Image ModuleUnit::faceplateImage (const std::string& id)
@@ -28,77 +40,45 @@ ModuleUnit::ModuleUnit (MixRackProcessor& p, int s) : proc (p), slot (s)
 {
     setSize (kWidth, kHeight);
 
-    moduleBox.addItem ("- Empty -", 1);
-    juce::StringArray cats { "Color", "EQ", "Dynamics", "Utility" };
-    for (auto& cat : cats)
-    {
-        moduleBox.addSectionHeading (cat);
-        for (int t = 0; t < ModuleRegistry::count(); ++t)
-            if (ModuleRegistry::info (t)->category == cat.toStdString())
-                moduleBox.addItem (ModuleRegistry::info (t)->name, t + 2);
-    }
-    moduleBox.onChange = [this]
-    {
-        const int type = moduleBox.getSelectedId() - 2;
-        if (type != proc.getSlotType (slot))
-        {
-            proc.undoManager.beginNewTransaction ("Change module");
-            proc.setSlotType (slot, type, true);
-            refresh();
-        }
-    };
-    moduleBox.setTooltip ("Choose the module for this slot");
-    addAndMakeVisible (moduleBox);
+    power.setTooltip ("Module on / bypass");
+    powerAtt = std::make_unique<juce::ButtonParameterAttachment> (*proc.slotParam (slot, "bypass"), power, &proc.undoManager);
+    addAndMakeVisible (power);
+
+    solo.setTooltip ("Solo: listen to this module only (all others bypassed)");
+    soloAtt = std::make_unique<juce::ButtonParameterAttachment> (*proc.slotParam (slot, "solo"), solo, &proc.undoManager);
+    addAndMakeVisible (solo);
 
     osBox.addItemList ({ "1x", "2x", "4x" }, 1);
     osBox.setTooltip ("Oversampling for this module");
     osAtt = std::make_unique<juce::ComboBoxParameterAttachment> (*proc.slotParam (slot, "os"), osBox, &proc.undoManager);
     addAndMakeVisible (osBox);
 
-    power.setTooltip ("Module on / bypass");
-    powerAtt = std::make_unique<juce::ButtonParameterAttachment> (*proc.slotParam (slot, "bypass"), power, &proc.undoManager);
-    addAndMakeVisible (power);
+    addAndMakeVisible (vu);
+    vu.setInterceptsMouseClicks (false, false);
 
-    soloButton.setClickingTogglesState (true);
-    soloButton.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xfff1c232));
-    soloButton.setTooltip ("Solo: listen to this module only (all others bypassed)");
-    soloAtt = std::make_unique<juce::ButtonParameterAttachment> (*proc.slotParam (slot, "solo"), soloButton, &proc.undoManager);
-    addAndMakeVisible (soloButton);
-
-    menuButton.setTooltip ("Module presets, copy / paste, reset");
-    menuButton.onClick = [this] { showMenu(); };
-    addAndMakeVisible (menuButton);
-
-    addAndMakeVisible (outBar);
-    addAndMakeVisible (grBar);
-
-    // trims: input, mix, output
-    auto addTrim = [this] (const char* suffix, const char* label, double defNorm, bool bipolar)
-    {
-        trims.push_back (makeKnobCell (*proc.slotParam (slot, suffix), label, defNorm, bipolar, 42));
-    };
-    addTrim ("in", "IN", 0.5, true);
-    addTrim ("mix", "MIX", 1.0, false);
-    addTrim ("out", "OUT", 0.5, true);
+    trims.push_back (makeKnobCell (*proc.slotParam (slot, "in"), "IN", 0.5, true));
+    trims.push_back (makeKnobCell (*proc.slotParam (slot, "mix"), "MIX", 1.0, true));
+    trims.push_back (makeKnobCell (*proc.slotParam (slot, "out"), "OUT", 0.5, true));
 
     refresh();
 }
 
 ModuleUnit::~ModuleUnit() = default;
 
-void ModuleUnit::styleKnob (juce::Slider& k, bool bipolar)
+void ModuleUnit::styleKnob (juce::Slider& k)
 {
-    const auto* mi = ModuleRegistry::info (proc.getSlotType (slot));
-    k.getProperties().set ("plate", (int) (mi ? mi->faceplate : Faceplate::Black));
-    k.getProperties().set ("accent", (juce::int64) (mi ? mi->accent : 0xffe0a040));
-    k.getProperties().set ("bipolar", bipolar);
+    const auto* mi = ModuleRegistry::info (shownType);
+    k.getProperties().set ("knob", (int) KnobStyle::Chrome);
+    k.getProperties().set ("lightPlate", mi != nullptr && skin::isLight (mi->faceplate));
     k.repaint();
 }
 
-std::unique_ptr<ModuleUnit::Cell> ModuleUnit::makeKnobCell (juce::RangedAudioParameter& param, const juce::String& label, double defNorm, bool bipolar, int)
+std::unique_ptr<ModuleUnit::Cell> ModuleUnit::makeKnobCell (juce::RangedAudioParameter& param, const juce::String& label, double defNorm, bool trim)
 {
     auto c = std::make_unique<Cell>();
     c->label = label;
+    c->param = &param;
+    c->hasLed = ! trim;
     c->knob = std::make_unique<juce::Slider> (juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::NoTextBox);
     auto& k = *c->knob;
     k.setRotaryParameters (juce::MathConstants<float>::pi * 1.2f, juce::MathConstants<float>::pi * 2.8f, true);
@@ -109,9 +89,15 @@ std::unique_ptr<ModuleUnit::Cell> ModuleUnit::makeKnobCell (juce::RangedAudioPar
     c->knobAtt = std::make_unique<juce::SliderParameterAttachment> (param, k, &proc.undoManager);
     k.setDoubleClickReturnValue (true, param.convertFrom0to1 ((float) defNorm));
     auto* raw = &k; auto* pp = &param; auto name = label;
-    k.onValueChange = [raw, pp, name] { raw->setTooltip (name + ": " + pp->getCurrentValueAsText()); };
+    juce::Component::SafePointer<ModuleUnit> safe (this);
+    const bool led = c->hasLed;
+    k.onValueChange = [raw, pp, name, safe, led]
+    {
+        raw->setTooltip (name + ": " + pp->getCurrentValueAsText());
+        if (led && safe != nullptr) safe->repaint (raw->getBounds().translated (0, -12).withHeight (14));
+    };
     k.onValueChange();
-    styleKnob (k, bipolar);
+    styleKnob (k);
     addAndMakeVisible (k);
     return c;
 }
@@ -128,13 +114,14 @@ void ModuleUnit::rebuild()
 {
     cells.clear();
     const auto* mi = ModuleRegistry::info (shownType);
-    moduleBox.setSelectedId (shownType + 2, juce::dontSendNotification);
-    osBox.setEnabled (mi != nullptr && mi->supportsOversampling);
-    for (auto& t : trims) { t->knob->setEnabled (mi != nullptr); styleKnob (*t->knob, (bool) t->knob->getProperties()["bipolar"]); }
-    power.setEnabled (mi != nullptr); soloButton.setEnabled (mi != nullptr);
-    grBar.setVisible (mi != nullptr && mi->hasGainReduction);
+    const bool has = mi != nullptr;
 
-    if (mi != nullptr)
+    power.setVisible (has); solo.setVisible (has); osBox.setVisible (has); vu.setVisible (has);
+    for (auto& t : trims) { t->knob->setVisible (has); styleKnob (*t->knob); }
+    osBox.setEnabled (has && mi->supportsOversampling);
+    if (has) power.setLedColour (juce::Colour (mi->accent).withSaturation (0.9f).withBrightness (1.0f));
+
+    if (has)
     {
         for (size_t k = 0; k < mi->params.size(); ++k)
         {
@@ -144,7 +131,7 @@ void ModuleUnit::rebuild()
             if (spec.kind == ParamSpec::Kind::Choice)
             {
                 c = std::make_unique<Cell>();
-                c->label = spec.shortName;
+                c->label = spec.shortName; c->param = &param;
                 c->combo = std::make_unique<juce::ComboBox>();
                 for (size_t i = 0; i < spec.choices.size(); ++i) c->combo->addItem (spec.choices[i], (int) i + 1);
                 auto* box = c->combo.get();
@@ -160,24 +147,19 @@ void ModuleUnit::rebuild()
             else if (spec.kind == ParamSpec::Kind::Toggle)
             {
                 c = std::make_unique<Cell>();
-                c->label = spec.shortName;
-                c->toggle = std::make_unique<juce::TextButton> ("OFF");
+                c->label = spec.shortName; c->param = &param;
+                c->toggle = std::make_unique<ToggleSwitch>();
                 auto* b = c->toggle.get();
-                b->setClickingTogglesState (true);
-                b->setColour (juce::TextButton::buttonOnColourId, juce::Colour (mi->accent));
                 c->paramAtt = std::make_unique<juce::ParameterAttachment> (param, [b] (float v)
-                    { b->setToggleState (v > 0.5f, juce::dontSendNotification); b->setButtonText (v > 0.5f ? "ON" : "OFF"); }, &proc.undoManager);
+                    { b->setToggleState (v > 0.5f, juce::dontSendNotification); }, &proc.undoManager);
                 auto* att = c->paramAtt.get();
-                b->onClick = [b, att] { att->setValueAsCompleteGesture (b->getToggleState() ? 1.0f : 0.0f); b->setButtonText (b->getToggleState() ? "ON" : "OFF"); };
+                b->onClick = [b, att] { att->setValueAsCompleteGesture (b->getToggleState() ? 1.0f : 0.0f); };
                 c->paramAtt->sendInitialUpdate();
-                b->setTooltip (spec.name);
+                b->setTooltip (spec.name + " (up = on)");
                 addAndMakeVisible (*b);
             }
             else
-            {
-                const bool bipolar = spec.minV < 0 && spec.maxV > 0;
-                c = makeKnobCell (param, spec.shortName, spec.defaultNorm(), bipolar, 46);
-            }
+                c = makeKnobCell (param, spec.shortName, spec.defaultNorm(), false);
             cells.push_back (std::move (c));
         }
     }
@@ -187,153 +169,164 @@ void ModuleUnit::rebuild()
 
 void ModuleUnit::resized()
 {
-    moduleBox.setBounds (8, 8, kWidth - 38, 22);
-    menuButton.setBounds (kWidth - 28, 8, 20, 22);
-    power.setBounds (7, 33, 22, 22);
-    soloButton.setBounds (30, 35, 18, 18);
-    osBox.setBounds (kWidth - 50, 34, 42, 18);
+    power.setBounds (16, 16, 26, 26);
 
-    for (size_t i = 0; i < cells.size(); ++i)
+    const int n = (int) cells.size();
+    gridCols = n <= 6 ? 2 : 3;
+    const int rows = juce::jmax (1, (n + gridCols - 1) / gridCols);
+    const int rowH = juce::jmin (116, (kGridBottom - kGridTop) / rows);
+    const float colW = (kWidth - 16) / (float) gridCols;
+    const int knob = juce::jmin (74, rowH - 28, (int) colW - 4);
+    labelSize = gridCols == 2 ? 14 : 12;
+    for (int i = 0; i < n; ++i)
     {
-        const int col = (int) i % kCols, row = (int) i / kCols;
-        auto area = juce::Rectangle<int> (8 + col * kCellW, kTop + row * kCellH, kCellW, kCellH);
-        auto& c = *cells[i];
+        const int col = i % gridCols, row = i / gridCols;
+        auto area = juce::Rectangle<int> ((int) (8 + col * colW), kGridTop + row * rowH, (int) colW, rowH);
+        auto& c = *cells[(size_t) i];
         c.area = area;
-        auto body = area.withTrimmedBottom (13);
-        if (c.knob)   c.knob->setBounds (body.withSizeKeepingCentre (48, 48));
-        if (c.combo)  c.combo->setBounds (body.withSizeKeepingCentre (62, 20));
-        if (c.toggle) c.toggle->setBounds (body.withSizeKeepingCentre (44, 20));
+        auto body = juce::Rectangle<int> (area.getX(), area.getY() + 10, area.getWidth(), knob);
+        if (c.knob)   c.knob->setBounds (body.withSizeKeepingCentre (knob, knob));
+        if (c.combo)  c.combo->setBounds (body.withSizeKeepingCentre (juce::jmin (68, (int) colW - 6), 22));
+        if (c.toggle) c.toggle->setBounds (body.withSizeKeepingCentre (22, 30));
     }
-    const int trimY = kTop + kRows * kCellH + 4;
     for (size_t i = 0; i < trims.size(); ++i)
     {
-        auto area = juce::Rectangle<int> (6 + (int) i * 46, trimY, 46, 56);
+        auto area = juce::Rectangle<int> (8 + (int) i * 68, kTrimY, 68, 78);
         trims[i]->area = area;
-        trims[i]->knob->setBounds (area.withTrimmedBottom (13).withSizeKeepingCentre (40, 40));
+        trims[i]->knob->setBounds (area.withHeight (62).withSizeKeepingCentre (60, 60));
     }
-    outBar.setBounds (12, trimY + 62, kWidth - 24, 8);
-    grBar.setBounds (12, trimY + 74, kWidth - 24, 6);
+    vu.setBounds (43, kVuY, 133, 42);
+    solo.setBounds (10, kVuY + 4, 26, 26);
+    osBox.setBounds (kWidth - 40, kVuY + 8, 32, 18);
 }
 
 void ModuleUnit::paint (juce::Graphics& g)
 {
     const auto* mi = ModuleRegistry::info (shownType);
-    const auto pc = plateColours (mi ? mi->faceplate : Faceplate::Graphite);
+    const auto plate = mi ? mi->faceplate : Faceplate::Black;
+    const bool light = mi && skin::isLight (plate);
     auto r = getLocalBounds().toFloat();
 
-    auto img = mi ? faceplateImage (mi->id) : juce::Image();
-    if (img.isValid())
-        g.drawImage (img, r, juce::RectanglePlacement::stretchToFit);
-    else
+    // brushed faceplate (or the user's own PNG) with lighting
+    auto custom = mi ? faceplateImage (mi->id) : juce::Image();
+    g.drawImage (custom.isValid() ? custom : (mi ? skin::plate (plate) : skin::emptyPlate()), r, juce::RectanglePlacement::stretchToFit);
+    if (! custom.isValid())
     {
-        const auto panel = mi ? pc.panel : juce::Colour (0xff1a1b1e);
-        g.setGradientFill (juce::ColourGradient (panel.brighter (0.12f), 0, 0, panel.darker (0.25f), 0, r.getBottom(), false));
-        g.fillRoundedRectangle (r, 4.0f);
-        // brushed texture
-        juce::Random rng ((juce::int64) slot * 7919 + 17);
-        for (int y = 0; y < kHeight; y += 2)
-        {
-            g.setColour ((rng.nextBool() ? juce::Colours::white : juce::Colours::black).withAlpha (0.018f));
-            g.drawHorizontalLine (y, 2.0f, (float) kWidth - 2.0f);
-        }
-        if (mi)
-        {
-            g.setColour (juce::Colour (mi->accent).withAlpha (0.85f));
-            g.fillRect (6.0f, 28.0f + 2.0f, r.getWidth() - 12.0f, 1.5f);
-        }
+        juce::ColourGradient light1 (juce::Colours::white.withAlpha (0.10f), r.getCentreX(), r.getY() + 120, juce::Colours::black.withAlpha (0.28f), r.getX(), r.getBottom(), true);
+        g.setGradientFill (light1); g.fillRect (r);
     }
-    g.setColour (juce::Colours::black.withAlpha (0.7f));
-    g.drawRoundedRectangle (r.reduced (0.5f), 4.0f, 1.0f);
+    g.setColour (juce::Colours::white.withAlpha (0.16f)); g.drawLine (1.0f, 1.0f, r.getRight() - 1.0f, 1.0f, 1.0f);
+    g.setColour (juce::Colours::black.withAlpha (0.8f)); g.drawRect (r, 1.2f);
 
-    // rack ears with screws
-    for (float y : { 4.0f, (float) kHeight - 12.0f })
-        for (float x : { 4.0f, (float) kWidth - 12.0f })
-        {
-            if (y < 10 && x < 10) continue;
-            g.setColour (juce::Colours::black.withAlpha (0.5f)); g.fillEllipse (x, y, 8, 8);
-            g.setColour (juce::Colour (0xffb8b8b8)); g.fillEllipse (x + 1, y + 1, 6, 6);
-            g.setColour (juce::Colour (0xff555555)); g.drawLine (x + 2, y + 4, x + 6, y + 4, 1.0f);
-        }
+    for (auto pt : { juce::Point<float> (14, 14), juce::Point<float> (r.getRight() - 14, 14),
+                     juce::Point<float> (14, r.getBottom() - 14), juce::Point<float> (r.getRight() - 14, r.getBottom() - 14) })
+        skin::drawScrew (g, pt, 6.5f);
 
-    // grip (drag handle)
-    auto grip = gripArea().toFloat();
-    g.setColour (pc.label.withAlpha (0.45f));
-    for (int i = 0; i < 4; ++i)
-        g.fillRoundedRectangle (grip.getX() + 6 + i * 9.0f, grip.getY() + 4, 3.0f, grip.getHeight() - 8, 1.0f);
-
+    const auto ink = light ? skin::labelDk : skin::labelLt;
     if (mi == nullptr)
     {
-        g.setColour (juce::Colours::white.withAlpha (0.35f));
-        g.setFont (juce::FontOptions (14.0f, juce::Font::bold));
-        g.drawFittedText ("EMPTY SLOT\n\nchoose a module\nfrom the list above", getLocalBounds().withTrimmedTop (120).withHeight (120), juce::Justification::centred, 5);
+        const auto c = juce::Colour (0xffb9b6b0);
+        drawEngraved (g, "- Empty -", { 0, 230, r.getWidth(), 30 }, skin::sans (22.0f, false), c);
+        drawEngraved (g, "EMPTY SLOT", { 0, 266, r.getWidth(), 30 }, skin::sans (23.0f, false), c);
+        g.setColour (juce::Colours::white.withAlpha (0.85f));
+        g.setFont (skin::sans (16.5f, true));
+        g.drawText ("choose a module", juce::Rectangle<float> (0, 304, r.getWidth(), 22), juce::Justification::centred);
+        g.drawText ("from the list above", juce::Rectangle<float> (0, 328, r.getWidth(), 22), juce::Justification::centred);
+        g.setColour (juce::Colours::white.withAlpha (0.3f));
+        g.setFont (skin::sans (11.0f, false));
+        const int pos = getPosition ? getPosition() : slot;
+        g.drawText ("click to load  |  slot " + juce::String (slot + 1) + " / pos " + juce::String (pos + 1), juce::Rectangle<float> (0, 560, r.getWidth(), 16), juce::Justification::centred);
+        return;
     }
 
-    g.setFont (juce::FontOptions (9.5f, juce::Font::bold));
-    g.setColour (pc.label);
+    // title (click = module menu, drag = move)
+    g.setColour (juce::Colours::black.withAlpha (light ? 0.0f : 0.5f));
+    g.setFont (skin::sans (18.0f, true));
+    auto title = titleArea().toFloat();
+    g.drawFittedText (mi->name, title.translated (0, 1.2f).toNearestInt(), juce::Justification::centred, 1, 0.7f);
+    g.setColour (ink);
+    g.drawFittedText (mi->name, title.toNearestInt(), juce::Justification::centred, 1, 0.7f);
+
+    // control labels + value LEDs above knobs
+    g.setFont (skin::sans ((float) labelSize, true));
+    const auto accent = juce::Colour (mi->accent).withSaturation (0.85f).withBrightness (1.0f);
     for (auto& c : cells)
-        g.drawFittedText (c->label, c->area.withTop (c->area.getBottom() - 13), juce::Justification::centred, 1);
-    g.setColour ((mi ? pc.label : juce::Colour (0xff9a9a9a)).withAlpha (mi ? 1.0f : 0.5f));
-    for (auto& t : trims)
-        g.drawFittedText (t->label, t->area.withTop (t->area.getBottom() - 13), juce::Justification::centred, 1);
-
-    // module title + chain position
-    if (mi)
     {
-        g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
-        g.setColour (pc.text.withAlpha (0.9f));
-        g.drawText (juce::String (mi->name).toUpperCase(), 0, kHeight - 30, kWidth, 14, juce::Justification::centred);
+        const int top = c->knob ? c->knob->getBottom() : (c->combo ? c->combo->getBottom() + 8 : c->toggle->getBottom());
+        g.setColour (juce::Colours::black.withAlpha (light ? 0.0f : 0.45f));
+        g.drawFittedText (c->label, juce::Rectangle<int> (c->area.getX(), top + 2, c->area.getWidth(), 16).translated (0, 1), juce::Justification::centred, 1, 0.7f);
+        g.setColour (ink);
+        g.drawFittedText (c->label, juce::Rectangle<int> (c->area.getX(), top + 2, c->area.getWidth(), 16), juce::Justification::centred, 1, 0.7f);
+        if (c->hasLed && c->knob)
+            skin::drawLed (g, { (float) c->knob->getBounds().getCentreX(), (float) c->knob->getY() - 4.0f }, 3.2f, accent,
+                           0.2f + 0.8f * c->param->getValue());
     }
-    g.setFont (juce::FontOptions (9.0f));
-    g.setColour (pc.text.withAlpha (0.5f));
+    g.setFont (skin::sans (14.0f, true));
+    for (auto& t : trims)
+    {
+        g.setColour (ink);
+        g.drawText (t->label, juce::Rectangle<int> (t->area.getX(), t->area.getY() + 60, t->area.getWidth(), 16), juce::Justification::centred);
+    }
+    g.setColour (ink.withAlpha (0.75f));
+    g.setFont (skin::sans (9.5f, true));
+    g.drawText ("SOLO", juce::Rectangle<int> (4, kVuY + 30, 38, 12), juce::Justification::centred);
+    g.drawText ("OS", juce::Rectangle<int> (kWidth - 42, kVuY + 28, 36, 12), juce::Justification::centred);
     const int pos = getPosition ? getPosition() : slot;
-    g.drawText ("SLOT " + juce::String (slot + 1) + "  /  POS " + juce::String (pos + 1), 0, kHeight - 17, kWidth, 12, juce::Justification::centred);
+    g.setColour (ink.withAlpha (0.55f));
+    g.drawText ("SLOT " + juce::String (slot + 1) + " / POS " + juce::String (pos + 1), juce::Rectangle<int> (30, kHeight - 20, kWidth - 60, 12), juce::Justification::centred);
 }
 
 void ModuleUnit::paintOverChildren (juce::Graphics& g)
 {
-    if (proc.slotParam (slot, "bypass")->getValue() > 0.5f && shownType >= 0)
+    if (! isEmpty() && proc.slotParam (slot, "bypass")->getValue() > 0.5f)
     {
-        g.setColour (juce::Colours::black.withAlpha (0.35f));
-        g.fillRoundedRectangle (getLocalBounds().toFloat().withTrimmedTop (56), 4.0f);
+        g.setColour (juce::Colours::black.withAlpha (0.4f));
+        g.fillRect (getLocalBounds().toFloat().withTrimmedTop (50).withTrimmedBottom (70).reduced (4, 0));
     }
     if (dragOver)
     {
-        g.setColour (juce::Colour (0xffe0a040));
-        g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (1.5f), 4.0f, 3.0f);
+        g.setColour (skin::amber);
+        g.drawRect (getLocalBounds().toFloat().reduced (1.5f), 3.0f);
     }
 }
 
 void ModuleUnit::updateMeters()
 {
-    auto& s = proc.engine.slot (slot);
-    outBar.setLevel (s.takePeak());
-    if (grBar.isVisible()) grBar.setGr (s.getGrDb());
-    static thread_local int tick = 0;
-    if ((++tick & 7) == 0) repaint (0, 56, kWidth, kHeight - 56);   // bypass shading follows automation
+    if (! isEmpty()) vu.pushLevel (proc.engine.slot (slot).takePeak());
+    if (++repaintTick % 8 == 0 && ! isEmpty()) repaint (0, 50, kWidth, kHeight - 120);   // bypass shading follows automation
 }
 
 //==============================================================================
 void ModuleUnit::mouseMove (const juce::MouseEvent& e)
 {
-    setMouseCursor (gripArea().contains (e.getPosition()) ? juce::MouseCursor::DraggingHandCursor : juce::MouseCursor::NormalCursor);
+    const bool overTitle = titleArea().contains (e.getPosition()) || isEmpty();
+    setMouseCursor (overTitle ? juce::MouseCursor::PointingHandCursor : juce::MouseCursor::NormalCursor);
 }
 
 void ModuleUnit::mouseDown (const juce::MouseEvent& e)
 {
-    if (e.mods.isPopupMenu()) showMenu();
+    dragStarted = false;
+    if (e.mods.isPopupMenu()) showModuleMenu();
 }
 
 void ModuleUnit::mouseDrag (const juce::MouseEvent& e)
 {
-    if (! gripArea().contains (e.getMouseDownPosition()) || e.getDistanceFromDragStart() < 4) return;
+    if (isEmpty() || ! titleArea().contains (e.getMouseDownPosition()) || e.getDistanceFromDragStart() < 5) return;
     if (auto* dnd = juce::DragAndDropContainer::findParentDragContainerFor (this))
         if (! dnd->isDragAndDropActive())
         {
+            dragStarted = true;
             auto snapshot = createComponentSnapshot (getLocalBounds()).rescaled (kWidth / 2, kHeight / 2);
             juce::Image faded (juce::Image::ARGB, snapshot.getWidth(), snapshot.getHeight(), true);
             { juce::Graphics g (faded); g.setOpacity (0.7f); g.drawImageAt (snapshot, 0, 0); }
             dnd->startDragging ("slot:" + juce::String (slot), this, juce::ScaledImage (faded), true);
         }
+}
+
+void ModuleUnit::mouseUp (const juce::MouseEvent& e)
+{
+    if (dragStarted || e.mods.isPopupMenu() || e.getDistanceFromDragStart() > 4) return;
+    if (titleArea().contains (e.getPosition()) || isEmpty()) showModuleMenu();
 }
 
 bool ModuleUnit::isInterestedInDragSource (const SourceDetails& d)
@@ -352,57 +345,82 @@ void ModuleUnit::itemDropped (const SourceDetails& d)
 }
 
 //==============================================================================
-void ModuleUnit::showMenu()
+void ModuleUnit::showModuleMenu()
 {
     juce::PopupMenu m;
+    m.addSectionHeader ("Load module");
+    m.addItem (1, "- Empty -", true, shownType < 0);
+    for (auto cat : { "Color", "EQ", "Dynamics", "Utility" })
+    {
+        juce::PopupMenu sub;
+        for (int t = 0; t < ModuleRegistry::count(); ++t)
+            if (ModuleRegistry::info (t)->category == cat)
+                sub.addItem (t + 2, ModuleRegistry::info (t)->name, true, t == shownType);
+        m.addSubMenu (cat, sub);
+    }
     const bool has = shownType >= 0;
-    m.addItem (1, "Save module preset...", has);
-    m.addItem (2, "Load module preset...");
     m.addSeparator();
-    m.addItem (3, "Copy module", has);
-    m.addItem (4, "Paste module", proc.hasClipboard());
+    m.addSectionHeader ("Module");
+    m.addItem (kSave, "Save module preset...", has);
+    m.addItem (kLoad, "Load module preset...");
+    m.addItem (kCopy, "Copy module", has);
+    m.addItem (kPaste, "Paste module", proc.hasClipboard());
+    m.addItem (kReset, "Reset to defaults", has);
+    m.addItem (kClear, "Clear slot", has);
     m.addSeparator();
-    m.addItem (5, "Reset to defaults", has);
-    m.addItem (6, "Clear slot", has);
+    m.addItem (-1, "Drag the title to move this module", false);
 
     juce::Component::SafePointer<ModuleUnit> safe (this);
-    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&menuButton), [safe] (int r)
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this).withTargetScreenArea (localAreaToGlobal (titleArea())),
+                     [safe] (int r)
     {
         if (safe == nullptr || r == 0) return;
-        auto& self = *safe;
-        auto& p = self.proc;
-        p.undoManager.beginNewTransaction();
-        if (r == 1 || r == 2)
+        if (r >= kSave) { safe->runMenuAction (r); return; }
+        const int type = r - 2;
+        if (type != safe->proc.getSlotType (safe->slot))
         {
-            moduleFolder().createDirectory();
-            const bool save = r == 1;
-            const auto* mi = ModuleRegistry::info (self.shownType);
-            auto start = moduleFolder().getChildFile (save && mi ? juce::String (mi->name) + ".blmod" : juce::String());
-            self.chooser = std::make_unique<juce::FileChooser> (save ? "Save module preset" : "Load module preset", start, kModuleExt);
-            const int flags = juce::FileBrowserComponent::canSelectFiles
-                            | (save ? juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::warnAboutOverwriting
-                                    : juce::FileBrowserComponent::openMode);
-            self.chooser->launchAsync (flags, [safe, save] (const juce::FileChooser& fc)
-            {
-                if (safe == nullptr) return;
-                auto f = fc.getResult();
-                if (f == juce::File()) return;
-                if (save)
-                {
-                    if (auto xml = safe->proc.makeModuleState (safe->slot).createXml())
-                        xml->writeTo (f.withFileExtension ("blmod"));
-                }
-                else if (auto xml = juce::XmlDocument::parse (f))
-                {
-                    safe->proc.loadModuleState (safe->slot, juce::ValueTree::fromXml (*xml));
-                    safe->refresh();
-                }
-            });
+            safe->proc.undoManager.beginNewTransaction ("Change module");
+            safe->proc.setSlotType (safe->slot, type, true);
+            safe->refresh();
         }
-        else if (r == 3) p.copyModule (self.slot);
-        else if (r == 4) { p.pasteModule (self.slot); self.refresh(); }
-        else if (r == 5) p.resetSlotParams (self.slot);
-        else if (r == 6) { p.setSlotType (self.slot, -1, true); self.refresh(); }
     });
+}
+
+void ModuleUnit::runMenuAction (int r)
+{
+    auto& p = proc;
+    p.undoManager.beginNewTransaction();
+    juce::Component::SafePointer<ModuleUnit> safe (this);
+    if (r == kSave || r == kLoad)
+    {
+        moduleFolder().createDirectory();
+        const bool save = r == kSave;
+        const auto* mi = ModuleRegistry::info (shownType);
+        auto start = moduleFolder().getChildFile (save && mi ? juce::String (mi->name) + ".blmod" : juce::String());
+        chooser = std::make_unique<juce::FileChooser> (save ? "Save module preset" : "Load module preset", start, kModuleExt);
+        const int flags = juce::FileBrowserComponent::canSelectFiles
+                        | (save ? juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::warnAboutOverwriting
+                                : juce::FileBrowserComponent::openMode);
+        chooser->launchAsync (flags, [safe, save] (const juce::FileChooser& fc)
+        {
+            if (safe == nullptr) return;
+            auto f = fc.getResult();
+            if (f == juce::File()) return;
+            if (save)
+            {
+                if (auto xml = safe->proc.makeModuleState (safe->slot).createXml())
+                    xml->writeTo (f.withFileExtension ("blmod"));
+            }
+            else if (auto xml = juce::XmlDocument::parse (f))
+            {
+                safe->proc.loadModuleState (safe->slot, juce::ValueTree::fromXml (*xml));
+                safe->refresh();
+            }
+        });
+    }
+    else if (r == kCopy)  p.copyModule (slot);
+    else if (r == kPaste) { p.pasteModule (slot); refresh(); }
+    else if (r == kReset) p.resetSlotParams (slot);
+    else if (r == kClear) { p.setSlotType (slot, -1, true); refresh(); }
 }
 } // namespace bl
