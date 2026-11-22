@@ -20,6 +20,26 @@ inline juce::Image image (const char* data, int size) { return juce::ImageCache:
 inline juce::Image background() { return image (BinaryData::bg_jpg, BinaryData::bg_jpgSize); }
 inline juce::Image emptyPlate() { return image (BinaryData::plate_empty_jpg, BinaryData::plate_empty_jpgSize); }
 
+// photographic sprites cut from the reference artwork
+inline juce::Image knobChrome() { return image (BinaryData::knob_chrome_png, BinaryData::knob_chrome_pngSize); }
+inline juce::Image knobGold()   { return image (BinaryData::knob_gold_png,   BinaryData::knob_gold_pngSize); }
+inline juce::Image knobTrim()   { return image (BinaryData::knob_trim_png,   BinaryData::knob_trim_pngSize); }
+inline juce::Image knobTop()    { return image (BinaryData::knob_top_png,    BinaryData::knob_top_pngSize); }
+inline juce::Image vuUnit()     { return image (BinaryData::vu_unit_png,     BinaryData::vu_unit_pngSize); }
+inline juce::Image toggleUp()   { return image (BinaryData::toggle_up_png,   BinaryData::toggle_up_pngSize); }
+
+/** Thin orange-tan meter needle with a soft shadow. */
+inline void drawNeedle (juce::Graphics& g, juce::Point<float> pivot, float r0, float r1, float angle, float thickness)
+{
+    auto pt = [&] (float rr) { return juce::Point<float> (pivot.x + std::sin (angle) * rr, pivot.y - std::cos (angle) * rr); };
+    g.setColour (juce::Colours::black.withAlpha (0.28f));
+    g.drawLine (juce::Line<float> (pt (r0), pt (r1)).withShortenedEnd (0.5f).toFloat(), thickness * 1.6f);
+    g.setColour (juce::Colour (0xffd28a3c));
+    g.drawLine ({ pt (r0), pt (r1) }, thickness);
+    g.setColour (juce::Colour (0x66ffe2b0));
+    g.drawLine ({ pt (r0), pt (r1) }, thickness * 0.4f);
+}
+
 inline juce::Image plate (Faceplate f)
 {
     switch (f)
@@ -87,8 +107,9 @@ inline void drawLed (juce::Graphics& g, juce::Point<float> c, float r, juce::Col
     g.fillEllipse (juce::Rectangle<float> (r * 2.5f, r * 2.5f).withCentre (c));
     if (level > 0.02f)
     {
-        g.setColour (col.withAlpha (0.35f * level));
-        g.fillEllipse (juce::Rectangle<float> (r * 5.0f, r * 5.0f).withCentre (c));
+        juce::ColourGradient halo (col.withAlpha (0.55f * level), c.x, c.y, col.withAlpha (0.0f), c.x + r * 3.2f, c.y, true);
+        g.setGradientFill (halo);
+        g.fillEllipse (juce::Rectangle<float> (r * 6.4f, r * 6.4f).withCentre (c));
     }
     const auto off = col.withMultipliedBrightness (0.22f).withMultipliedSaturation (0.7f);
     const auto on = off.interpolatedWith (col, level);

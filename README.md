@@ -29,7 +29,7 @@ Output: `build/BubLeonMixRack_artefacts/Release/VST3/Bub Leon Mix Rack.vst3`
 
 ## Using the rack
 
-The GUI is a brushed-metal 19" rack (design reference: `docs/design_reference.png`).
+The GUI is a brushed-metal 19" rack built from the design artwork (`docs/design_reference.png`). The faceplates, knobs, paddle switches, VU meters and rack hardware are photographic elements cut from that image (`tools/mkskin3.py` regenerates them). Only the pointers, needles, LEDs, displays and text are drawn live.
 
 | Element | What it does |
 |---|---|

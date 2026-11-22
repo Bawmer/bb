@@ -44,6 +44,8 @@ private:
     {
         juce::String label;
         juce::Rectangle<int> area;
+        juce::Point<int> labelPos;       // centre of the label text
+        bool small = false;
         juce::RangedAudioParameter* param = nullptr;
         bool hasLed = false;
         std::unique_ptr<juce::Slider> knob;
@@ -57,8 +59,9 @@ private:
     void showModuleMenu();
     void runMenuAction (int id);
     std::unique_ptr<Cell> makeKnobCell (juce::RangedAudioParameter&, const juce::String& label, double defNorm, bool trim);
+    void showOsMenu();
     void styleKnob (juce::Slider&);
-    juce::Rectangle<int> titleArea() const { return { 46, 10, kWidth - 70, 38 }; }
+    juce::Rectangle<int> titleArea() const { return { 48, 12, kWidth - 72, 34 }; }
     bool isEmpty() const { return shownType < 0; }
 
     MixRackProcessor& proc;
@@ -66,12 +69,10 @@ private:
     int shownType = -999;
     bool dragOver = false, dragStarted = false;
     int repaintTick = 0;
-    int gridCols = 2, labelSize = 13;
+    bool compact = false;
 
-    LedButton power { juce::Colour (0xffff4a2a), true }, solo { juce::Colour (0xffffb020), false };
-    juce::ComboBox osBox;
+    LedButton power { juce::Colour (0xffff3a22), true }, solo { juce::Colour (0xffffa020), false }, osLamp { juce::Colour (0xffffa020), false };
     std::unique_ptr<juce::ButtonParameterAttachment> powerAtt, soloAtt;
-    std::unique_ptr<juce::ComboBoxParameterAttachment> osAtt;
 
     std::vector<std::unique_ptr<Cell>> cells, trims;
     VuMeter vu { true };

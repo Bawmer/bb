@@ -39,7 +39,7 @@ juce_add_plugin(BubLeonMixRack
     VST3_CATEGORIES           Fx Dynamics EQ
     COPY_PLUGIN_AFTER_BUILD   FALSE)
 
-file(GLOB MR_SKIN CONFIGURE_DEPENDS Resources/skin/*.jpg)
+file(GLOB MR_SKIN CONFIGURE_DEPENDS Resources/skin/*.jpg Resources/skin/*.png)
 juce_add_binary_data(MixRackSkin SOURCES ${MR_SKIN})
 if(NOT MSVC)
     set_target_properties(MixRackSkin PROPERTIES POSITION_INDEPENDENT_CODE TRUE)

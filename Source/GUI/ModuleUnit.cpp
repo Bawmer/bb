@@ -6,21 +6,31 @@ namespace bl
 {
 namespace
 {
-constexpr int kGridTop = 56, kGridBottom = 444, kTrimY = 452, kVuY = 540;
+// unit geometry taken from the reference artwork (219 x 603)
+constexpr int kColX[2] = { 57, 160 };
+constexpr int kRowY[3] = { 106, 214, 316 };           // big knob centres (image layout)
+constexpr int kRowYCompact[3] = { 98, 192, 284 };     // when a second row of small controls is needed
+constexpr int kSmallRowY = 399, kSmallRowYCompact[2] = { 366, 416 };
+constexpr int kTrimY = 483, kTrimX[3] = { 37, 107, 175 };
+const juce::Rectangle<int> kVu { 42, 539, 134, 42 };
 const char* kModuleExt = "*.blmod";
 enum MenuIds { kSave = 901, kLoad, kCopy, kPaste, kReset, kClear };
 
 juce::File moduleFolder() { return MixRackProcessor::userPresetFolder().getChildFile ("Modules"); }
 
-void drawEngraved (juce::Graphics& g, const juce::String& t, juce::Rectangle<float> r, juce::Font f, juce::Colour col)
+void shadowText (juce::Graphics& g, const juce::String& t, juce::Rectangle<float> r, juce::Colour col, bool light)
 {
-    g.setFont (f);
-    g.setColour (juce::Colours::black.withAlpha (0.55f));
-    g.drawText (t, r.translated (0, -1.0f), juce::Justification::centred);
-    g.setColour (juce::Colours::white.withAlpha (0.12f));
-    g.drawText (t, r.translated (0, 1.2f), juce::Justification::centred);
+    if (! light) { g.setColour (juce::Colours::black.withAlpha (0.65f)); g.drawText (t, r.translated (0.8f, 1.4f), juce::Justification::centred); }
+    else         { g.setColour (juce::Colours::white.withAlpha (0.35f)); g.drawText (t, r.translated (0.0f, 1.0f), juce::Justification::centred); }
     g.setColour (col);
     g.drawText (t, r, juce::Justification::centred);
+}
+
+void engraved (juce::Graphics& g, const juce::String& t, juce::Rectangle<float> r, juce::Colour col)
+{
+    g.setColour (juce::Colours::black.withAlpha (0.6f));  g.drawText (t, r.translated (0, -1.0f), juce::Justification::centred);
+    g.setColour (juce::Colours::white.withAlpha (0.10f)); g.drawText (t, r.translated (0, 1.2f), juce::Justification::centred);
+    g.setColour (col);                                     g.drawText (t, r, juce::Justification::centred);
 }
 }
 
@@ -48,10 +58,10 @@ ModuleUnit::ModuleUnit (MixRackProcessor& p, int s) : proc (p), slot (s)
     soloAtt = std::make_unique<juce::ButtonParameterAttachment> (*proc.slotParam (slot, "solo"), solo, &proc.undoManager);
     addAndMakeVisible (solo);
 
-    osBox.addItemList ({ "1x", "2x", "4x" }, 1);
-    osBox.setTooltip ("Oversampling for this module");
-    osAtt = std::make_unique<juce::ComboBoxParameterAttachment> (*proc.slotParam (slot, "os"), osBox, &proc.undoManager);
-    addAndMakeVisible (osBox);
+    osLamp.setClickingTogglesState (false);
+    osLamp.setTooltip ("Oversampling for this module (click: 1x / 2x / 4x)");
+    osLamp.onClick = [this] { showOsMenu(); };
+    addAndMakeVisible (osLamp);
 
     addAndMakeVisible (vu);
     vu.setInterceptsMouseClicks (false, false);
@@ -68,7 +78,11 @@ ModuleUnit::~ModuleUnit() = default;
 void ModuleUnit::styleKnob (juce::Slider& k)
 {
     const auto* mi = ModuleRegistry::info (shownType);
-    k.getProperties().set ("knob", (int) KnobStyle::Chrome);
+    KnobStyle st = KnobStyle::Chrome;
+    if (mi && (mi->faceplate == Faceplate::Silver || mi->faceplate == Faceplate::Cream
+                    || mi->faceplate == Faceplate::Blue || mi->faceplate == Faceplate::Bronze || mi->faceplate == Faceplate::Hammer))
+        st = KnobStyle::Gold;
+    k.getProperties().set ("knob", (int) st);
     k.getProperties().set ("lightPlate", mi != nullptr && skin::isLight (mi->faceplate));
     k.repaint();
 }
@@ -81,6 +95,7 @@ std::unique_ptr<ModuleUnit::Cell> ModuleUnit::makeKnobCell (juce::RangedAudioPar
     c->hasLed = ! trim;
     c->knob = std::make_unique<juce::Slider> (juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::NoTextBox);
     auto& k = *c->knob;
+    if (trim) k.getProperties().set ("trim", true);
     k.setRotaryParameters (juce::MathConstants<float>::pi * 1.2f, juce::MathConstants<float>::pi * 2.8f, true);
     k.setMouseDragSensitivity (220);
     k.setVelocityModeParameters (0.12, 1, 0.0, true, juce::ModifierKeys::ctrlModifier);   // Ctrl-drag = fine
@@ -94,7 +109,7 @@ std::unique_ptr<ModuleUnit::Cell> ModuleUnit::makeKnobCell (juce::RangedAudioPar
     k.onValueChange = [raw, pp, name, safe, led]
     {
         raw->setTooltip (name + ": " + pp->getCurrentValueAsText());
-        if (led && safe != nullptr) safe->repaint (raw->getBounds().translated (0, -12).withHeight (14));
+        if (led && safe != nullptr) safe->repaint (raw->getBounds().getCentreX() - 16, raw->getY() - 14, 32, 32);
     };
     k.onValueChange();
     styleKnob (k);
@@ -116,17 +131,22 @@ void ModuleUnit::rebuild()
     const auto* mi = ModuleRegistry::info (shownType);
     const bool has = mi != nullptr;
 
-    power.setVisible (has); solo.setVisible (has); osBox.setVisible (has); vu.setVisible (has);
+    power.setVisible (has); solo.setVisible (has); osLamp.setVisible (has); vu.setVisible (has);
     for (auto& t : trims) { t->knob->setVisible (has); styleKnob (*t->knob); }
-    osBox.setEnabled (has && mi->supportsOversampling);
-    if (has) power.setLedColour (juce::Colour (mi->accent).withSaturation (0.9f).withBrightness (1.0f));
+    osLamp.setEnabled (has && mi->supportsOversampling);
+    if (has) power.setLedColour (juce::Colour (0xffff3a22));   // red power lamp, as on the hardware
 
     if (has)
     {
-        for (size_t k = 0; k < mi->params.size(); ++k)
+        // continuous controls take the big knob positions (max 6); the rest go to the small-control row
+        std::vector<int> big, small;
+        for (int k = 0; k < (int) mi->params.size(); ++k)
+            (! mi->params[(size_t) k].isDiscrete() && big.size() < 6 ? big : small).push_back (k);
+
+        auto addCell = [&] (int k, bool isSmall)
         {
-            const auto& spec = mi->params[k];
-            auto& param = *proc.slotParam (slot, "p" + juce::String ((int) k + 1));
+            const auto& spec = mi->params[(size_t) k];
+            auto& param = *proc.slotParam (slot, "p" + juce::String (k + 1));
             std::unique_ptr<Cell> c;
             if (spec.kind == ParamSpec::Kind::Choice)
             {
@@ -159,9 +179,15 @@ void ModuleUnit::rebuild()
                 addAndMakeVisible (*b);
             }
             else
+            {
                 c = makeKnobCell (param, spec.shortName, spec.defaultNorm(), false);
+                if (isSmall) { c->knob->getProperties().set ("trim", true); c->hasLed = false; styleKnob (*c->knob); }
+            }
+            c->small = isSmall;
             cells.push_back (std::move (c));
-        }
+        };
+        for (int k : big) addCell (k, false);
+        for (int k : small) addCell (k, true);
     }
     resized();
     repaint();
@@ -169,35 +195,52 @@ void ModuleUnit::rebuild()
 
 void ModuleUnit::resized()
 {
-    power.setBounds (16, 16, 26, 26);
+    power.setBounds (juce::Rectangle<int> (42, 42).withCentre ({ 34, 29 }));
 
-    const int n = (int) cells.size();
-    gridCols = n <= 6 ? 2 : 3;
-    const int rows = juce::jmax (1, (n + gridCols - 1) / gridCols);
-    const int rowH = juce::jmin (116, (kGridBottom - kGridTop) / rows);
-    const float colW = (kWidth - 16) / (float) gridCols;
-    const int knob = juce::jmin (74, rowH - 28, (int) colW - 4);
-    labelSize = gridCols == 2 ? 14 : 12;
-    for (int i = 0; i < n; ++i)
+    int nSmall = 0;
+    for (auto& c : cells) nSmall += c->small ? 1 : 0;
+    compact = nSmall > 3;
+    const int bigSize = compact ? 84 : 96;
+    const int smallRows = compact ? 2 : 1;
+    const int perRow = juce::jmax (1, (nSmall + smallRows - 1) / smallRows);
+
+    int bigIdx = 0, smallIdx = 0;
+    for (auto& cp : cells)
     {
-        const int col = i % gridCols, row = i / gridCols;
-        auto area = juce::Rectangle<int> ((int) (8 + col * colW), kGridTop + row * rowH, (int) colW, rowH);
-        auto& c = *cells[(size_t) i];
-        c.area = area;
-        auto body = juce::Rectangle<int> (area.getX(), area.getY() + 10, area.getWidth(), knob);
-        if (c.knob)   c.knob->setBounds (body.withSizeKeepingCentre (knob, knob));
-        if (c.combo)  c.combo->setBounds (body.withSizeKeepingCentre (juce::jmin (68, (int) colW - 6), 22));
-        if (c.toggle) c.toggle->setBounds (body.withSizeKeepingCentre (22, 30));
+        auto& c = *cp;
+        if (! c.small)
+        {
+            const int cx = kColX[bigIdx % 2], cy = (compact ? kRowYCompact : kRowY)[juce::jmin (2, bigIdx / 2)];
+            c.area = juce::Rectangle<int> (bigSize, bigSize).withCentre ({ cx, cy });
+            c.knob->setBounds (c.area);
+            c.labelPos = { cx, cy + (compact ? 45 : 50) };
+            ++bigIdx;
+        }
+        else
+        {
+            const int row = smallIdx / perRow, col = smallIdx % perRow;
+            const int inRow = juce::jmin (perRow, nSmall - row * perRow);
+            const float span = (float) (kWidth - 40), x0 = 20.0f;
+            const int cx = (int) (x0 + span * (col + 0.5f) / (float) inRow);
+            const int cy = compact ? kSmallRowYCompact[row] : kSmallRowY;
+            const int cw = (int) (span / (float) inRow);
+            c.area = juce::Rectangle<int> (cw, 40).withCentre ({ cx, cy });
+            if (c.knob)   c.knob->setBounds (juce::Rectangle<int> (40, 40).withCentre ({ cx, cy - 2 }));
+            if (c.combo)  c.combo->setBounds (juce::Rectangle<int> (juce::jmin (62, cw - 4), 20).withCentre ({ cx, cy - 2 }));
+            if (c.toggle) c.toggle->setBounds (juce::Rectangle<int> (22, 27).withCentre ({ cx, cy - 3 }));
+            c.labelPos = { cx, cy + 22 };
+            ++smallIdx;
+        }
     }
     for (size_t i = 0; i < trims.size(); ++i)
     {
-        auto area = juce::Rectangle<int> (8 + (int) i * 68, kTrimY, 68, 78);
-        trims[i]->area = area;
-        trims[i]->knob->setBounds (area.withHeight (62).withSizeKeepingCentre (60, 60));
+        trims[i]->area = juce::Rectangle<int> (70, 70).withCentre ({ kTrimX[i], kTrimY });
+        trims[i]->knob->setBounds (trims[i]->area);
+        trims[i]->labelPos = { kTrimX[i], kTrimY + 38 };
     }
-    vu.setBounds (43, kVuY, 133, 42);
-    solo.setBounds (10, kVuY + 4, 26, 26);
-    osBox.setBounds (kWidth - 40, kVuY + 8, 32, 18);
+    vu.setBounds (kVu);
+    solo.setBounds (juce::Rectangle<int> (30, 30).withCentre ({ 27, 557 }));
+    osLamp.setBounds (juce::Rectangle<int> (30, 30).withCentre ({ 192, 557 }));
 }
 
 void ModuleUnit::paint (juce::Graphics& g)
@@ -207,73 +250,60 @@ void ModuleUnit::paint (juce::Graphics& g)
     const bool light = mi && skin::isLight (plate);
     auto r = getLocalBounds().toFloat();
 
-    // brushed faceplate (or the user's own PNG) with lighting
+    // photographic faceplate (or the user's own PNG); corner screws are part of the plate
     auto custom = mi ? faceplateImage (mi->id) : juce::Image();
+    g.setOpacity (1.0f);
     g.drawImage (custom.isValid() ? custom : (mi ? skin::plate (plate) : skin::emptyPlate()), r, juce::RectanglePlacement::stretchToFit);
-    if (! custom.isValid())
-    {
-        juce::ColourGradient light1 (juce::Colours::white.withAlpha (0.10f), r.getCentreX(), r.getY() + 120, juce::Colours::black.withAlpha (0.28f), r.getX(), r.getBottom(), true);
-        g.setGradientFill (light1); g.fillRect (r);
-    }
-    g.setColour (juce::Colours::white.withAlpha (0.16f)); g.drawLine (1.0f, 1.0f, r.getRight() - 1.0f, 1.0f, 1.0f);
-    g.setColour (juce::Colours::black.withAlpha (0.8f)); g.drawRect (r, 1.2f);
-
-    for (auto pt : { juce::Point<float> (14, 14), juce::Point<float> (r.getRight() - 14, 14),
-                     juce::Point<float> (14, r.getBottom() - 14), juce::Point<float> (r.getRight() - 14, r.getBottom() - 14) })
-        skin::drawScrew (g, pt, 6.5f);
 
     const auto ink = light ? skin::labelDk : skin::labelLt;
     if (mi == nullptr)
     {
-        const auto c = juce::Colour (0xffb9b6b0);
-        drawEngraved (g, "- Empty -", { 0, 230, r.getWidth(), 30 }, skin::sans (22.0f, false), c);
-        drawEngraved (g, "EMPTY SLOT", { 0, 266, r.getWidth(), 30 }, skin::sans (23.0f, false), c);
-        g.setColour (juce::Colours::white.withAlpha (0.85f));
-        g.setFont (skin::sans (16.5f, true));
-        g.drawText ("choose a module", juce::Rectangle<float> (0, 304, r.getWidth(), 22), juce::Justification::centred);
-        g.drawText ("from the list above", juce::Rectangle<float> (0, 328, r.getWidth(), 22), juce::Justification::centred);
-        g.setColour (juce::Colours::white.withAlpha (0.3f));
-        g.setFont (skin::sans (11.0f, false));
-        const int pos = getPosition ? getPosition() : slot;
-        g.drawText ("click to load  |  slot " + juce::String (slot + 1) + " / pos " + juce::String (pos + 1), juce::Rectangle<float> (0, 560, r.getWidth(), 16), juce::Justification::centred);
+        const auto c = juce::Colour (0xffc9c5bd);
+        g.setFont (skin::sans (25.0f, false)); engraved (g, "- Empty -", { 0, 218, r.getWidth(), 30 }, c);
+        g.setFont (skin::sans (25.0f, false)); engraved (g, "EMPTY SLOT", { 0, 258, r.getWidth(), 30 }, c);
+        g.setFont (skin::sans (18.0f, true));
+        shadowText (g, "choose a module", { 0, 294, r.getWidth(), 22 }, juce::Colour (0xfff2f0ea), false);
+        shadowText (g, "from the list above", { 0, 318, r.getWidth(), 22 }, juce::Colour (0xfff2f0ea), false);
         return;
     }
 
-    // title (click = module menu, drag = move)
-    g.setColour (juce::Colours::black.withAlpha (light ? 0.0f : 0.5f));
-    g.setFont (skin::sans (18.0f, true));
-    auto title = titleArea().toFloat();
-    g.drawFittedText (mi->name, title.translated (0, 1.2f).toNearestInt(), juce::Justification::centred, 1, 0.7f);
-    g.setColour (ink);
-    g.drawFittedText (mi->name, title.toNearestInt(), juce::Justification::centred, 1, 0.7f);
+    // title
+    g.setFont (skin::sans (21.0f, true));
+    {
+        const auto t = titleArea().toFloat();
+        if (! light) { g.setColour (juce::Colours::black.withAlpha (0.7f)); g.drawFittedText (mi->name, t.translated (0.8f, 1.5f).toNearestInt(), juce::Justification::centred, 1, 0.7f); }
+        g.setColour (ink);
+        g.drawFittedText (mi->name, t.toNearestInt(), juce::Justification::centred, 1, 0.7f);
+    }
 
-    // control labels + value LEDs above knobs
-    g.setFont (skin::sans ((float) labelSize, true));
-    const auto accent = juce::Colour (mi->accent).withSaturation (0.85f).withBrightness (1.0f);
+    // value LEDs above the big knobs + labels
+    int bigIdx = 0;
     for (auto& c : cells)
     {
-        const int top = c->knob ? c->knob->getBottom() : (c->combo ? c->combo->getBottom() + 8 : c->toggle->getBottom());
-        g.setColour (juce::Colours::black.withAlpha (light ? 0.0f : 0.45f));
-        g.drawFittedText (c->label, juce::Rectangle<int> (c->area.getX(), top + 2, c->area.getWidth(), 16).translated (0, 1), juce::Justification::centred, 1, 0.7f);
-        g.setColour (ink);
-        g.drawFittedText (c->label, juce::Rectangle<int> (c->area.getX(), top + 2, c->area.getWidth(), 16), juce::Justification::centred, 1, 0.7f);
-        if (c->hasLed && c->knob)
-            skin::drawLed (g, { (float) c->knob->getBounds().getCentreX(), (float) c->knob->getY() - 4.0f }, 3.2f, accent,
-                           0.2f + 0.8f * c->param->getValue());
+        if (c->hasLed && c->knob && ! c->small)
+        {
+            const auto kb = c->knob->getBounds();
+            const auto col = bigIdx < 2 ? juce::Colour (0xffff3020) : juce::Colour (0xffffc23a);   // red top row, amber below
+            skin::drawLed (g, { (float) kb.getCentreX(), (float) kb.getY() + (compact ? 3.0f : 3.0f) }, 4.2f, col, 0.2f + 0.8f * c->param->getValue());
+        }
+        if (! c->small) ++bigIdx;
+        g.setFont (skin::sans (c->small ? 11.5f : (compact ? 14.5f : 16.5f), true));
+        shadowText (g, c->label, juce::Rectangle<float> (c->small ? (float) c->area.getWidth() + 8 : 110.0f, 18.0f).withCentre (c->labelPos.toFloat()), ink, light);
     }
-    g.setFont (skin::sans (14.0f, true));
+    g.setFont (skin::sans (16.0f, true));
     for (auto& t : trims)
-    {
-        g.setColour (ink);
-        g.drawText (t->label, juce::Rectangle<int> (t->area.getX(), t->area.getY() + 60, t->area.getWidth(), 16), juce::Justification::centred);
-    }
-    g.setColour (ink.withAlpha (0.75f));
+        shadowText (g, t->label, juce::Rectangle<float> (70, 18).withCentre (t->labelPos.toFloat()), ink, light);
+
+    // small captions around the VU
+    auto* osP = proc.slotParam (slot, "os");
+    const int os = (int) std::lround (osP->convertFrom0to1 (osP->getValue()));
     g.setFont (skin::sans (9.5f, true));
-    g.drawText ("SOLO", juce::Rectangle<int> (4, kVuY + 30, 38, 12), juce::Justification::centred);
-    g.drawText ("OS", juce::Rectangle<int> (kWidth - 42, kVuY + 28, 36, 12), juce::Justification::centred);
+    g.setColour (ink.withAlpha (0.8f));
+    g.drawText ("SOLO", juce::Rectangle<int> (4, 570, 46, 11), juce::Justification::centred);
+    g.drawText (mi->supportsOversampling ? "OS " + juce::String (1 << os) + "x" : "OS -", juce::Rectangle<int> (169, 570, 46, 11), juce::Justification::centred);
     const int pos = getPosition ? getPosition() : slot;
-    g.setColour (ink.withAlpha (0.55f));
-    g.drawText ("SLOT " + juce::String (slot + 1) + " / POS " + juce::String (pos + 1), juce::Rectangle<int> (30, kHeight - 20, kWidth - 60, 12), juce::Justification::centred);
+    g.setFont (skin::sans (12.5f, true));
+    shadowText (g, "SLOT " + juce::String (slot + 1) + " / POS " + juce::String (pos + 1), { 40, 582, 139, 16 }, ink.withAlpha (0.85f), light);
 }
 
 void ModuleUnit::paintOverChildren (juce::Graphics& g)
@@ -292,8 +322,30 @@ void ModuleUnit::paintOverChildren (juce::Graphics& g)
 
 void ModuleUnit::updateMeters()
 {
-    if (! isEmpty()) vu.pushLevel (proc.engine.slot (slot).takePeak());
-    if (++repaintTick % 8 == 0 && ! isEmpty()) repaint (0, 50, kWidth, kHeight - 120);   // bypass shading follows automation
+    if (isEmpty()) return;
+    vu.pushLevel (proc.engine.slot (slot).takePeak());
+    auto* osP = proc.slotParam (slot, "os");
+    const bool osOn = osLamp.isEnabled() && osP->getValue() > 0.01f;
+    if (osLamp.getToggleState() != osOn) { osLamp.setToggleState (osOn, juce::dontSendNotification); repaint (160, 560, 59, 24); }
+    if (++repaintTick % 8 == 0) repaint (0, 50, kWidth, kHeight - 120);   // bypass shading follows automation
+}
+
+void ModuleUnit::showOsMenu()
+{
+    auto* osP = proc.slotParam (slot, "os");
+    const int cur = (int) std::lround (osP->convertFrom0to1 (osP->getValue()));
+    juce::PopupMenu m;
+    m.addSectionHeader ("Oversampling");
+    for (int i = 0; i < 3; ++i) m.addItem (i + 1, juce::String (1 << i) + "x", true, i == cur);
+    juce::Component::SafePointer<ModuleUnit> safe (this);
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&osLamp), [safe, osP] (int r)
+    {
+        if (safe == nullptr || r == 0) return;
+        osP->beginChangeGesture();
+        osP->setValueNotifyingHost (osP->convertTo0to1 ((float) (r - 1)));
+        osP->endChangeGesture();
+        safe->repaint();
+    });
 }
 
 //==============================================================================

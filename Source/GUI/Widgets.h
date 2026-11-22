@@ -15,7 +15,7 @@ public:
     {
         auto r = getLocalBounds().toFloat();
         const bool on = invertLit ? ! getToggleState() : getToggleState();
-        const float rad = juce::jmin (r.getWidth(), r.getHeight()) * 0.26f;
+        const float rad = juce::jmin (r.getWidth(), r.getHeight()) * 0.15f;   // leave room for the halo
         skin::drawLed (g, r.getCentre(), rad, lit, on && isEnabled() ? 1.0f : 0.0f);
         if (over) { g.setColour (juce::Colours::white.withAlpha (0.25f)); g.drawEllipse (juce::Rectangle<float> (rad * 2.9f, rad * 2.9f).withCentre (r.getCentre()), 1.0f); }
     }
@@ -23,41 +23,67 @@ private:
     juce::Colour lit; bool invertLit;
 };
 
-/** Miniature bat-handle toggle switch (up = on). */
+/** Miniature paddle toggle (photo sprite from the artwork; up = on). */
 class ToggleSwitch final : public juce::ToggleButton
 {
 public:
     void paintButton (juce::Graphics& g, bool over, bool) override
     {
+        auto img = skin::toggleUp();
         auto r = getLocalBounds().toFloat();
-        auto body = r.withSizeKeepingCentre (juce::jmin (16.0f, r.getWidth()), juce::jmin (22.0f, r.getHeight()));
-        g.setColour (juce::Colours::black.withAlpha (0.5f)); g.fillRoundedRectangle (body.translated (0.8f, 1.2f), 2.0f);
-        g.setGradientFill (juce::ColourGradient (juce::Colour (0xff2c2c2e), body.getX(), body.getY(), juce::Colour (0xff050505), body.getRight(), body.getBottom(), false));
-        g.fillRoundedRectangle (body, 2.0f);
-        g.setColour (juce::Colour (0xff7a7a7c)); g.drawRoundedRectangle (body.reduced (0.5f), 2.0f, 0.8f);
-        const bool on = getToggleState();
-        auto lever = body.withSizeKeepingCentre (body.getWidth() * 0.5f, body.getHeight() * 0.55f).translated (0, on ? -body.getHeight() * 0.18f : body.getHeight() * 0.18f);
-        g.setGradientFill (juce::ColourGradient (juce::Colour (0xfff2f2f0), lever.getX(), lever.getY(), juce::Colour (0xff6a6a6c), lever.getRight(), lever.getBottom(), false));
-        g.fillRoundedRectangle (lever, 2.0f);
-        g.setColour (juce::Colours::black.withAlpha (0.6f)); g.drawRoundedRectangle (lever, 2.0f, 0.7f);
-        if (over) { g.setColour (juce::Colours::white.withAlpha (0.2f)); g.drawRoundedRectangle (body, 2.0f, 1.0f); }
+        const float h = juce::jmin (r.getHeight(), r.getWidth() * 27.0f / 22.0f);
+        auto dst = r.withSizeKeepingCentre (h * 22.0f / 27.0f, h);
+        g.setColour (juce::Colours::black.withAlpha (0.45f)); g.fillRect (dst.translated (1.0f, 1.5f));
+        g.setOpacity (1.0f);
+        if (getToggleState())
+            g.drawImage (img, dst, juce::RectanglePlacement::stretchToFit);
+        else
+        {
+            juce::Graphics::ScopedSaveState s (g);
+            g.addTransform (juce::AffineTransform::verticalFlip (dst.getY() * 2.0f + dst.getHeight()));
+            g.drawImage (img, dst, juce::RectanglePlacement::stretchToFit);
+            g.setColour (juce::Colours::black.withAlpha (0.25f));
+            g.fillRect (dst);
+        }
+        if (over) { g.setColour (juce::Colours::white.withAlpha (0.18f)); g.drawRect (dst, 1.0f); }
     }
 };
 
-/** Analog VU meter with simple needle ballistics (fed a peak level ~30x per second). */
+/** VU meter: the unit version draws the photo face + needle, the main version only the needle over the printed face. */
 class VuMeter final : public juce::Component
 {
 public:
-    explicit VuMeter (bool isSmall) : small (isSmall) { setOpaque (false); }
+    explicit VuMeter (bool isUnit) : unit (isUnit) {}
     void pushLevel (float linearPeak)
     {
         const float target = skin::vuPosition ((float) gainToDb (linearPeak));
         pos += (target - pos) * (target > pos ? 0.45f : 0.12f);
         repaint();
     }
-    void paint (juce::Graphics& g) override { skin::drawVuMeter (g, getLocalBounds().toFloat(), pos, small); }
+    void paint (juce::Graphics& g) override
+    {
+        auto r = getLocalBounds().toFloat();
+        if (unit)
+        {
+            g.setOpacity (1.0f);
+            g.drawImage (skin::vuUnit(), r, juce::RectanglePlacement::stretchToFit);
+            const float sx = r.getWidth() / 134.0f, sy = r.getHeight() / 42.0f;
+            juce::Graphics::ScopedSaveState s (g);
+            g.reduceClipRegion (juce::Rectangle<float> (6 * sx, 4 * sy, 122 * sx, 30 * sy).toNearestInt());
+            const float a = -0.86f + 1.72f * pos;
+            skin::drawNeedle (g, { 67.0f * sx, 41.0f * sy }, 9.0f * sy, 36.0f * sy, a, 1.3f * sx);
+        }
+        else
+        {
+            // component bounds = printed face; pivot sits below the face like the artwork
+            juce::Graphics::ScopedSaveState s (g);
+            g.reduceClipRegion (getLocalBounds());
+            const float a = -0.83f + 1.66f * pos;
+            skin::drawNeedle (g, { r.getCentreX(), r.getBottom() + 22.0f }, 34.0f, 102.0f, a, 2.0f);
+        }
+    }
 private:
-    bool small; float pos = 0.0f;
+    bool unit; float pos = 0.0f;
 };
 
 /** Row of amber LEDs showing gain reduction (1 / 3 / 6 / 10 / 15 dB). */

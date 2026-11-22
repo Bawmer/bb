@@ -5,7 +5,7 @@
 
 namespace bl
 {
-enum class KnobStyle { Chrome = 0, Brass = 1 };
+enum class KnobStyle { Chrome = 0, Top = 1, Gold = 2, Trim = 3 };
 
 class RackLookAndFeel final : public juce::LookAndFeel_V4
 {
@@ -94,7 +94,7 @@ public:
     }
 
     //==========================================================================
-    /** Knurled chrome (or brass) knob with white tick ring. */
+    /** Photographic knob sprite (cut from the reference artwork) with a white tick ring and a live pointer. */
     void drawRotarySlider (juce::Graphics& g, int x, int y, int w, int h, float pos,
                            float startA, float endA, juce::Slider& s) override
     {
@@ -107,56 +107,47 @@ public:
         b = b.withSizeKeepingCentre (size, size);
         const auto c = b.getCentre();
         const float rad = size * 0.5f, angle = startA + pos * (endA - startA);
+        const float kr = ticks ? rad * 0.70f : rad;
 
         if (ticks)
         {
-            g.setColour (light ? juce::Colour (0xcc2b241b) : juce::Colour (0xddf2f0ea));
             for (int i = 0; i <= 10; ++i)
             {
                 const float a = startA + (endA - startA) * i / 10.0f;
-                g.drawLine ({ c.getPointOnCircumference (rad - 0.5f, a), c.getPointOnCircumference (rad * 0.80f, a) }, i % 5 == 0 ? 1.6f : 1.1f);
+                const auto p1 = c.getPointOnCircumference (rad - 0.5f, a), p2 = c.getPointOnCircumference (kr + rad * 0.14f, a);
+                g.setColour (juce::Colours::black.withAlpha (0.45f));
+                g.drawLine ({ p1.translated (0.6f, 0.9f), p2.translated (0.6f, 0.9f) }, juce::jmax (1.2f, size * 0.022f));
+                g.setColour (light ? juce::Colour (0xff3a3128) : juce::Colour (0xffe9e6df));
+                g.drawLine ({ p1, p2 }, juce::jmax (1.2f, size * 0.022f));
             }
         }
 
-        const float kr = rad * (ticks ? 0.70f : 0.9f);
+        // drop shadow
         auto knob = juce::Rectangle<float> (kr * 2, kr * 2).withCentre (c);
-        g.setColour (juce::Colours::black.withAlpha (0.6f));
-        g.fillEllipse (knob.translated (kr * 0.08f, kr * 0.16f).expanded (kr * 0.06f));
+        g.setColour (juce::Colours::black.withAlpha (0.55f));
+        g.fillEllipse (knob.translated (kr * 0.06f, kr * 0.14f).expanded (kr * 0.07f));
+        g.setColour (juce::Colours::black.withAlpha (0.25f));
+        g.fillEllipse (knob.translated (kr * 0.10f, kr * 0.26f).expanded (kr * 0.12f));
 
-        juce::Colour hi, mid, lo;
-        if (style == KnobStyle::Brass) { hi = juce::Colour (0xfff7e3b0); mid = juce::Colour (0xffb08a4a); lo = juce::Colour (0xff3e2c12); }
-        else                           { hi = juce::Colour (0xfff4f4f2); mid = juce::Colour (0xff9a9a9c); lo = juce::Colour (0xff2a2a2c); }
-
-        // knurled skirt
-        juce::ColourGradient skirt (hi, knob.getX(), knob.getY(), lo, knob.getRight(), knob.getBottom(), false);
-        skirt.addColour (0.5, mid);
-        g.setGradientFill (skirt);
-        g.fillEllipse (knob);
-        g.setColour (juce::Colours::black.withAlpha (0.35f));
-        for (int i = 0; i < 40; ++i)
+        juce::Image img;
+        switch (style)
         {
-            const float a = juce::MathConstants<float>::twoPi * i / 40.0f;
-            g.drawLine ({ c.getPointOnCircumference (kr, a), c.getPointOnCircumference (kr * 0.86f, a) }, 0.8f);
+            case KnobStyle::Top:  img = skin::knobTop(); break;
+            case KnobStyle::Gold: img = skin::knobGold(); break;
+            case KnobStyle::Trim: img = skin::knobTrim(); break;
+            case KnobStyle::Chrome:
+            default:              img = skin::knobChrome(); break;
         }
-        // machined cap with concentric brushing
-        auto cap = knob.reduced (kr * 0.17f);
-        juce::ColourGradient capG (hi, cap.getX(), cap.getY(), mid.darker (0.4f), cap.getRight(), cap.getBottom(), false);
-        capG.addColour (0.45, mid.brighter (0.25f));
-        g.setGradientFill (capG);
-        g.fillEllipse (cap);
-        for (float rr = cap.getWidth() * 0.5f - 1.5f; rr > 2.0f; rr -= 2.0f)
-        {
-            g.setColour ((((int) rr) % 4 == 0 ? juce::Colours::white : juce::Colours::black).withAlpha (0.06f));
-            g.drawEllipse (juce::Rectangle<float> (rr * 2, rr * 2).withCentre (c), 0.8f);
-        }
-        g.setColour (juce::Colours::black.withAlpha (0.5f));
-        g.drawEllipse (cap, 0.8f);
-        g.setColour (juce::Colours::white.withAlpha (0.28f));
-        g.fillEllipse (cap.withSizeKeepingCentre (cap.getWidth() * 0.55f, cap.getHeight() * 0.28f).translated (-cap.getWidth() * 0.12f, -cap.getHeight() * 0.22f));
+        g.setImageResamplingQuality (juce::Graphics::highResamplingQuality);
+        g.setOpacity (1.0f);   // drawImage uses the current colour's alpha
+        g.drawImage (img, knob, juce::RectanglePlacement::stretchToFit);
 
-        // pointer
-        g.setColour (juce::Colour (0xff111111));
-        g.drawLine ({ c.getPointOnCircumference (kr * 0.25f, angle), c.getPointOnCircumference (kr * 0.86f, angle) }, juce::jmax (1.8f, size * 0.035f));
+        // pointer on the cap
+        const auto p1 = c.getPointOnCircumference (kr * 0.30f, angle), p2 = c.getPointOnCircumference (kr * 0.74f, angle);
+        g.setColour (juce::Colours::black.withAlpha (0.55f));
+        g.drawLine ({ p1.translated (0.5f, 0.7f), p2.translated (0.5f, 0.7f) }, juce::jmax (1.6f, kr * 0.09f));
+        g.setColour (style == KnobStyle::Chrome ? juce::Colour (0xff1a1a1a) : juce::Colour (0xfffff4dc));
+        g.drawLine ({ p1, p2 }, juce::jmax (1.3f, kr * 0.07f));
         if (! s.isEnabled()) { g.setColour (juce::Colours::black.withAlpha (0.35f)); g.fillEllipse (knob); }
     }
 };

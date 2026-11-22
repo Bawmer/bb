@@ -22,7 +22,7 @@ void styleTopKnob (juce::Slider& s)
     s.setRotaryParameters (juce::MathConstants<float>::pi * 1.2f, juce::MathConstants<float>::pi * 2.8f, true);
     s.setVelocityModeParameters (0.12, 1, 0.0, true, juce::ModifierKeys::ctrlModifier);
     s.setPopupDisplayEnabled (true, true, nullptr, 900);
-    s.getProperties().set ("knob", (int) KnobStyle::Brass);
+    s.getProperties().set ("knob", (int) KnobStyle::Top);
     s.getProperties().set ("ticks", false);   // the tick ring is printed on the panel
 }
 }
@@ -301,20 +301,21 @@ void RackContent::resized()
     aButton.setBounds (1088, 102, 62, 41);
     bButton.setBounds (1166, 102, 62, 41);
     copyAB.setBounds (1243, 102, 70, 41);
-    inGain.setBounds (1374 - 36, 122 - 36, 72, 72);
-    outGain.setBounds (1482 - 36, 122 - 36, 72, 72);
+    inGain.setBounds (juce::Rectangle<int> (65, 65).withCentre ({ 1373, 120 }));
+    outGain.setBounds (juce::Rectangle<int> (65, 65).withCentre ({ 1481, 120 }));
 
     for (int pos = 0; pos < kNumSlots; ++pos)
         units[(size_t) shownOrder[(size_t) pos]]->setBounds (unitRect (pos));
 
-    inVu.setBounds (439, 873, 193, 80);
-    outVu.setBounds (645, 873, 191, 80);
+    inVu.setBounds (446, 879, 180, 67);    // printed VU faces; only the needles are live
+    outVu.setBounds (653, 879, 180, 67);
     for (int pos = 0; pos < kNumSlots; ++pos)
         grLeds[(size_t) shownOrder[(size_t) pos]]->setBounds ((int) (kGrX0 + pos * kGrStep) - 70, 1034, 140, 24);
 }
 
 void RackContent::paint (juce::Graphics& g)
 {
+    g.setOpacity (1.0f);
     g.drawImage (bg, getLocalBounds().toFloat(), juce::RectanglePlacement::stretchToFit);
 
     // latency readout (top right)
